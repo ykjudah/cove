@@ -1,0 +1,13 @@
+node_modules
+dist/
+/app.js
+*.log
+.env
+.env.*
+!.env.example
+**/.temp/
+.private/
+*private-key*
+*signing-key*
+work/
+.DS_Store
