@@ -1,0 +1,9 @@
+[functions.record-session-ip]
+verify_jwt = true
+
+
+[functions.call-ice]
+verify_jwt = true
+
+[functions.update-account]
+verify_jwt = true

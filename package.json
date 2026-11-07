@@ -1,0 +1,78 @@
+{
+  "name": "pocketchat",
+  "version": "2.3.0",
+  "description": "Cove \u2014 messages, calls, and games with friends",
+  "author": "Cove",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "bundle": "esbuild src/app.js --bundle --platform=browser --format=iife --outfile=app.js",
+    "start": "npm run bundle && electron .",
+    "test": "node --test test/*.test.cjs",
+    "dist": "npm run bundle && electron-builder --config electron-builder.cjs --win nsis --x64 --publish never",
+    "sign-update": "node scripts/sign-update.cjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "chess.js": "1.4.0",
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "js-yaml": "4.3.2"
+  },
+  "build": {
+    "appId": "app.pocketchat.desktop",
+    "productName": "Cove",
+    "asar": true,
+    "toolsets": {
+      "nsis": "1.2.1"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "update-security.cjs",
+      "release-config.json",
+      "index.html",
+      "style.css",
+      "app.js",
+      "package.json",
+      "build/icon.png",
+      "build/update-public-key.pem",
+      "CHESS-LICENSE.txt",
+      "assets/imposter/*.png"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "requestedExecutionLevel": "asInvoker",
+      "signAndEditExecutable": false,
+      "artifactName": "Cove-${version}-Setup-${arch}.${ext}",
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "packElevateHelper": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "executableName": "Cove",
+    "artifactName": "Cove-${version}-Setup-${arch}.${ext}"
+  }
+}

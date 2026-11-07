@@ -1,0 +1,12 @@
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const yaml = require('js-yaml');
+const { manifestPayload, verifyManifest } = require('../update-security.cjs');
+const key = process.env.POCKETCHAT_UPDATE_SIGNING_KEY || (process.env.POCKETCHAT_UPDATE_SIGNING_KEY_FILE && fs.readFileSync(process.env.POCKETCHAT_UPDATE_SIGNING_KEY_FILE, 'utf8'));
+if (!key) throw new Error('Set POCKETCHAT_UPDATE_SIGNING_KEY or POCKETCHAT_UPDATE_SIGNING_KEY_FILE to the private PEM from the owner kit. Never commit it.');
+const file = 'dist/latest.yml';
+const info = yaml.load(fs.readFileSync(file, 'utf8'));
+info.pocketchatSignature = crypto.sign(null, manifestPayload(info), key).toString('base64');
+verifyManifest(info, fs.readFileSync('build/update-public-key.pem'));
+fs.writeFileSync(file, yaml.dump(info));
+console.log('Signed and verified latest.yml for PocketChat ' + info.version);
