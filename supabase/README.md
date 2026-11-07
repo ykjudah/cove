@@ -1,6 +1,6 @@
 # Supabase deployment status
 
-The saved project reference `quppwphdilsiducbrogj` opens the signed-in PocketChat project, labeled main / PRODUCTION in the dashboard. On 2026-11-07 the dashboard reports Healthy, no tracked migrations, no GitHub repository connected, and no backups. The Edge Functions list contains record-session-ip and update-account; call-ice is not listed. The full schema, function source parity, secrets, and installed client configuration still need verification. Do not treat a healthy dashboard as proof of release readiness.
+The saved project reference `quppwphdilsiducbrogj` opens the signed-in PocketChat project, labeled main / PRODUCTION in the dashboard. On 2026-11-07 the dashboard reports Healthy, no tracked migrations, no GitHub repository connected, and no backups. The Edge Functions list contains record-session-ip and update-account; call-ice is not listed. Read-only catalog checks found 14 public tables, all with RLS enabled, 19 public policies, and no supabase_migrations.schema_migrations table. The full schema, function source parity, secrets, and installed client configuration still need verification. Do not treat a healthy dashboard as proof of release readiness.
 
 ## Verify before changing anything
 
