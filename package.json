@@ -46,7 +46,8 @@
       "CHESS-LICENSE.txt",
       "assets/imposter/*.png",
       "imposter-3d-legacy.js",
-      "IMPOSTER-3D-LICENSES.txt"
+      "IMPOSTER-3D-LICENSES.txt",
+      "imposter-3d-legacy.css"
     ],
     "directories": {
       "output": "dist"
