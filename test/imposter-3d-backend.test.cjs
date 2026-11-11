@@ -94,7 +94,11 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
    catch(err){err.message='3D '+act+' action: '+err.message;throw err;}
   };
   await user(0);
-  console.log('[3D map test] stage 1');
+  console.log('[3D map test] stage 1: direct v2 creation');
+  const baseline=(await db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
+   ['Caldera',1,5,2,20,'Baseline Caldera',30])).rows[0].id;
+  assert.ok(baseline);
+  console.log('[3D map test] stage 1: 3D wrapper creation');
   const game=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
    ['Caldera',1,5,2,20,'Three Dimensional Maps',30])).rows[0].id;
   console.log('[3D map test] stage 2');
