@@ -22,6 +22,7 @@ test('Windows releases include original recoverable 3D game, styles and licenses
   const bundle=fs.readFileSync(path.join(root,'imposter-3d-legacy.js'),'utf8');
   const css=fs.readFileSync(path.join(root,'imposter-3d-legacy.css'),'utf8');
   assert.match(bundle,/function createScene3D\(/);
+  assert.match(bundle,/option\("Map", \["Keel", "Caldera", "Frostline"\]/);
   assert.match(bundle,/function wardrobePreview\(/);
   assert.match(bundle,/function crewModel\(/);
   assert.match(bundle,/function taskPuzzle\(/);
