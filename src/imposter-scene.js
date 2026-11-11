@@ -173,10 +173,18 @@ export function createScene(mapName,initial,label,send,nearby){
  async function sync(now){
   if(inflight||now-lastSend<85||!queue.length)return;
   inflight=true;lastSend=now;
-  pending??={revision,steps:queue.slice(0,48)};const batch=pending.steps,count=batch.length;
+  pending??={revision,steps:queue.slice(0,24)};const batch=pending.steps,count=batch.length;
   try{
    const ack=await send(pending.revision,batch);
    if(!active||!ack)return;
+   // The server can defer a batch until movement credit replenishes.
+   // Retain predicted steps until the authoritative revision advances.
+   if(ack.revision===pending.revision)return;
+   if(ack.revision!==pending.revision+1){
+    queue=[];pending=null;revision=ack.revision;
+    smoothX+=px-ack.x;smoothY+=py-ack.y;px=ack.x;py=ack.y;
+    return;
+   }
    queue.splice(0,count);revision=ack.revision;pending=null;
    let x=ack.x,y=ack.y;
    for(const [dx,dy] of queue)[x,y]=step(x,y,dx,dy);
@@ -198,7 +206,7 @@ export function createScene(mapName,initial,label,send,nearby){
   if(pointer&&Math.hypot(pointer[2]-pointer[0],pointer[3]-pointer[1])>5){dx=pointer[2]-pointer[0];dy=pointer[3]-pointer[1];}
   if(dx||dy)target=null;else if(target){dx=target[0]-px;dy=target[1]-py;if(Math.hypot(dx,dy)<1){target=null;dx=dy=0;}}
   const len=Math.hypot(dx,dy),oldX=px,oldY=py;
-  if(len&&queue.length<48){dx=dx/len*dt*speed;dy=dy/len*dt*speed;[px,py]=step(px,py,dx,dy);if(px!==oldX||py!==oldY)queue.push([px-oldX,py-oldY]);if(dx)face=dx<0?-1:1;}
+  if(len&&queue.length<180){dx=dx/len*dt*speed;dy=dy/len*dt*speed;[px,py]=step(px,py,dx,dy);if(px!==oldX||py!==oldY)queue.push([px-oldX,py-oldY]);if(dx)face=dx<0?-1:1;}
   const moved=Math.hypot(px-oldX,py-oldY);stride=moved?stride+moved*.65:0;
   if(queue.length)void sync(now);smoothX*=Math.exp(-dt*18);smoothY*=Math.exp(-dt*18);
   cameraX+=(px-cameraX)*Math.min(1,dt*13);cameraY+=(py-cameraY)*Math.min(1,dt*13);
