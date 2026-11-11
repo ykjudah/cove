@@ -148,6 +148,10 @@ begin
  if s.vent_node is not null and act not in ('read','say','vote')
   then raise exception 'Exit vent before performing that action';end if;
  result:=public.imp_action_v2(game_id,act,arg);
+ if act='sabotage' then
+  update private.imp_games set lights_epoch=lights_epoch+1 where id=game_id;
+  result:=public.imp_action_v2(game_id,'read','');
+ end if;
  if act='start' or result->'game'->>'phase' in ('meeting','lobby','finished') then
   update private.imp_seats set vent_node=null where game=game_id and vent_node is not null;
  end if;
