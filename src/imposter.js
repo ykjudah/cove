@@ -70,24 +70,25 @@ function board(data){
 export function mountImposter({rpc,user,label,friends}){
  const dialog=el('dialog',null,'imp-dialog'),frame=el('div',null,'imp-frame'),head=el('header'),title=el('h2','Open Games'),body=el('div',null,'imp-body'),status=el('p',null,'hint');
  head.append(title,button('×',()=>dialog.close()));head.lastChild.setAttribute('aria-label','Close Open Games');frame.append(head,body,status);dialog.append(frame);document.body.append(dialog);
- let gameId=null,snapshot=null,token=0,busy=false,reading=false,task=null,chatDraft='',config=false,last='',listTimer;
+ let gameId=null,snapshot=null,token=0,busy=false,reading=false,task=null,chatDraft='',config=false,last='',listTimer,uiTimer;
+ let actionButtons={};
  let scene=null,revealed=false,mapOpen=false,tasksExpanded=true;
- function stopScene(){scene?.destroy();scene=null;}
+ function stopScene(){scene?.destroy();scene=null;actionButtons={};}
  function reset(){stopScene();revealed=false;mapOpen=false;token++;gameId=null;snapshot=null;busy=false;reading=false;task=null;config=false;last='';chatDraft='';status.textContent='';}
- dialog.addEventListener('close',()=>{clearInterval(listTimer);reset();});
+ dialog.addEventListener('close',()=>{clearInterval(listTimer);clearInterval(uiTimer);reset();});
  const close=()=>{if(dialog.open)dialog.close();};
  function error(e){status.textContent=e.message||String(e);}
  async function read(){
   if(!dialog.open||busy||reading||config)return;
   const t=token;reading=true;
   try{
-   if(gameId){const data=await rpc('imp_action',{game_id:gameId,act:'read',arg:''});if(t===token&&!busy)apply(data);}
-   else{const games=await rpc('imp_list');if(t===token&&!busy&&!config){const key=JSON.stringify(games);if(key!==last){last=key;renderList(games);}}}
-  }catch(e){if(t===token)error(e);}finally{if(t===token)reading=false;}
+   if(gameId){const data=await rpc('imp_action_v2',{game_id:gameId,act:'read',arg:''});if(t===token&&!busy)apply(data);}
+   else{const games=await rpc('imp_list_v2');if(t===token&&!busy&&!config){const key=JSON.stringify(games);if(key!==last){last=key;renderList(games);}}}
+  }catch(e){if(t===token){if(gameId&&/Match unavailable|Join the lobby first|Join this lobby first/i.test(e.message||''))home();else error(e);}}finally{if(t===token)reading=false;}
  }
  async function perform(act,arg=''){
   if(busy)return;busy=true;const t=++token;reading=false;status.textContent='';
-  try{const data=await rpc('imp_action',{game_id:gameId,act,arg:String(arg)});if(t!==token)return;if(act==='leave'){home();return;}apply(data);}
+  try{const data=await rpc('imp_action_v2',{game_id:gameId,act,arg:String(arg)});if(t!==token)return;if(act==='leave'||act==='close'){home();return;}apply(data);}
   catch(e){if(t===token)error(e);}finally{if(t===token)busy=false;}
  }
  function apply(data){
@@ -95,7 +96,8 @@ export function mountImposter({rpc,user,label,friends}){
   const proximity=[station&&Math.hypot(data.me.x-station[1],data.me.y-(station[2]-station[4]*.24))<=12,...data.players.map(p=>[p.uid,Math.hypot(p.x-data.me.x,p.y-data.me.y)<=13,Math.hypot(p.x-data.me.x,p.y-data.me.y)<=15])];
   const key=JSON.stringify(data,(k,v)=>['x','y','walked_at','move_rev','move_credit'].includes(k)?undefined:v)+JSON.stringify(proximity);if(key===last)return;last=key;
   if(data.game.phase!=='play'){task=null;stopScene();}
-  const focused=document.activeElement?.classList.contains('imp-say');renderMatch(data);
+  if(data.game.phase==='lobby')revealed=false;
+  const focused=document.activeElement?.classList.contains('imp-say');renderMatch(data);updateActionButtons();
   if(focused){const input=body.querySelector('.imp-say');input?.focus();input?.setSelectionRange(input.value.length,input.value.length);}
  }
  function home(){reset();title.textContent='Open Games';body.replaceChildren();read();}
@@ -104,15 +106,24 @@ export function mountImposter({rpc,user,label,friends}){
   title.textContent='Open Games';const cover=el('div',null,'imp-cover');
   const chart=previewScene('Keel');chart.setAttribute('aria-hidden','true');chart.classList.add('imp-cover-chart');cover.append(chart);
   cover.append(el('h3','Imposter'),el('p','Find the imposters or finish your tasks.'),button('Create lobby',settings));body.replaceChildren(cover);
-  for(const g of games){const row=el('div',null,'imp-row');row.append(el('strong',g.map),el('span',label(g.host)+' · '+g.players+' joined · '+g.phase),button(g.joined?'Open':'Join game',()=>enter(g.id,!g.joined)));body.append(row);}
+  for(const g of games){const row=el('div',null,'imp-row');
+   row.append(el('strong',g.name||g.map),el('span',label(g.host)+' · '+g.players+' joined · '+g.phase));
+   if(g.joined||g.phase==='lobby')row.append(button(g.joined?'Open':'Join game',()=>enter(g.id,!g.joined)));
+   else row.append(el('small','In progress'));
+   if(g.is_admin)row.append(button('Delete game',async()=>{
+    if(!window.confirm('Delete '+(g.name||g.map)+' for everyone?'))return;
+    try{await rpc('imp_delete_game',{game_id:g.id});last='';await read();}catch(e){error(e);}
+   }));
+   body.append(row);
+  }
  }
  function settings(editing=false){
   editing=editing===true;const current=editing?snapshot.game:{};
-  config=true;const fields=[
+  config=true;const nameInput=el('input');nameInput.maxLength=40;nameInput.value=current.name||'My Imposter Lobby';nameInput.placeholder='Lobby name';const nameField=el('label','Lobby name');nameField.append(nameInput);const fields=[
     option('Map',current.map&&current.map!=='Keel'?['Keel',current.map]:['Keel'],current.map||'Keel'),option('Imposters',[1,2,3],current.imposters||1),option('Kill cooldown (seconds)',[5,10,20,30,45,60],current.cooldown||20),
-    option('Tasks per innocent',[1,2,3,4,5],current.tasks||3),option('Meeting time (seconds)',[20,30,45,60,90,120],current.vote_seconds||45)
+    option('Tasks per innocent',[1,2,3,4,5],current.tasks||3),option('Meeting time (seconds)',[20,30,45,60,90,120],current.vote_seconds||45),option('Meeting cooldown (seconds)',[10,20,30,45,60,90,120],current.meeting_cooldown||30)
   ];
-  const form=el('div',null,'imp-settings');form.append(...fields.map(f=>f[0]));
+  const form=el('div',null,'imp-settings');form.append(nameField,...fields.map(f=>f[0]));
   const preview=el('div',null,'imp-chart-preview');
   const drawPreview=()=>{
    const name=fields[0][1].value;
@@ -121,8 +132,8 @@ export function mountImposter({rpc,user,label,friends}){
   };
   fields[0][1].onchange=drawPreview;drawPreview();
   form.append(button(editing?'Save settings':'Create lobby',async()=>{if(busy)return;busy=true;const t=token;try{const v=fields.map(f=>f[1].value);
-   if(editing){busy=false;config=false;last='';await perform('configure',JSON.stringify({map:v[0],imposters:+v[1],cooldown:+v[2],tasks:+v[3],vote_seconds:+v[4]}));return;}
-   const id=await rpc('imp_create',{map_name:v[0],imposters:+v[1],cooldown:+v[2],task_count:+v[3],vote_seconds:+v[4]});if(t===token)enter(id,false);
+   if(editing){busy=false;config=false;last='';await perform('configure',JSON.stringify({map:v[0],imposters:+v[1],cooldown:+v[2],tasks:+v[3],vote_seconds:+v[4],meeting_cooldown:+v[5],name:nameInput.value.trim()}));return;}
+   const id=await rpc('imp_create_v2',{map_name:v[0],imposters:+v[1],cooldown:+v[2],task_count:+v[3],vote_seconds:+v[4],lobby_name:nameInput.value.trim(),meeting_cooldown_seconds:+v[5]});if(t===token)enter(id,false);
   }catch(e){if(t===token)error(e);}finally{if(t===token)busy=false;}}),button('Back',editing?()=>{config=false;renderMatch(snapshot);}:home));title.textContent=editing?'Lobby settings':'Create Imposter lobby';const shell=el('div',null,'imp-setup-shell');shell.append(preview,form);body.replaceChildren(shell);
  }
  function taskPanel(me){
@@ -134,12 +145,20 @@ export function mountImposter({rpc,user,label,friends}){
   return panel;
  }
  function renderMatch(data){
-  const {game,me,players}=data;title.textContent=game.map+' · Imposter';
-  const top=el('div',null,'imp-row');top.append(button('← Open Games',home),el('span',players.filter(p=>p.joined).length+' players'),button('Leave match',()=>perform('leave')));body.replaceChildren(top);
+  const {game,me,players}=data;title.textContent=(game.name||game.map)+' · Imposter';
+  const top=el('div',null,'imp-row');
+  top.append(button('← Open Games',home),el('span',players.filter(p=>p.joined).length+' players'));
+  if(me.uid===game.host)top.append(button('Close lobby',()=>{if(window.confirm('Close this lobby and end the game for everyone?'))perform('close');}));
+  else top.append(button('Leave lobby',()=>perform('leave')));
+  body.replaceChildren(top);
   if(game.phase==='lobby'){
-   body.append(el('h3','Lobby'),el('p',game.imposters+' imposter(s) · '+game.tasks+' tasks each · '+game.cooldown+'s kill cooldown · '+game.vote_seconds+'s meetings'));
+   body.append(el('h3','Lobby · '+(game.name||game.map)),el('p',game.imposters+' imposter(s) · '+game.tasks+' tasks each · '+game.cooldown+'s kill cooldown · '+game.meeting_cooldown+'s meeting cooldown · '+game.vote_seconds+'s voting'));
    const crew=el('div',null,'imp-roster');
-   for(const p of players){const tile=el('div',null,'imp-member');tile.append(suitBadge(p,players),el('span',label(p.uid)+(p.uid===game.host?' · Host':'')+(p.joined?' · Ready':' · Invited')));crew.append(tile);}body.append(crew);
+   for(const p of players){const tile=el('div',null,'imp-member');
+    tile.append(suitBadge(p,players),el('span',label(p.uid)+(p.uid===game.host?' · Host':'')+(p.joined?' · Ready':' · Invited')));
+    if(me.uid===game.host&&p.uid!==me.uid)tile.append(button('Kick',()=>kickPlayer(p)));
+    crew.append(tile);
+   }body.append(crew);
    const dressing=el('div',null,'imp-dressing');dressing.append(el('h3','Your suit'));
    const colors=el('div',null,'imp-swatches');
    const colorNames=['Coral','Green','Blue','Gold','Violet','Pink','Teal','Pearl','Copper','Olive','Slate','Peach'];
@@ -150,13 +169,18 @@ export function mountImposter({rpc,user,label,friends}){
     const start=button('Start match',()=>perform('start'));start.disabled=players.filter(p=>p.joined).length<game.imposters*2+1;body.append(start,el('small','At least '+(game.imposters*2+1)+' joined players required.'));}
    return;
   }
-  if(game.phase==='finished'){body.append(outcome(data,label));return;}
+  if(game.phase==='finished'){body.append(outcome(data,label),el('p','Returning everyone to the lobby shortly…'));renderLastVotes(data);renderHostKickList(data);return;}
   const hud=el('div',null,'imp-info');hud.append(el('strong',(me.alive?'':'Ghost · ')+me.role),el('span','Tasks '+data.progress+'/'+data.total));
   const meter=el('progress');meter.max=Math.max(1,data.total);meter.value=data.progress;meter.setAttribute('aria-label','Crew task progress');hud.append(meter);body.append(hud);
   if(game.notice)body.append(el('small',game.notice));
+  renderLastVotes(data);renderHostKickList(data);
   if(game.phase==='meeting'){
    body.append(el('h3','Meeting'),el('small','Voting closes '+new Date(game.deadline).toLocaleTimeString()));
    for(const msg of data.chat)body.append(el('p',label(msg.uid)+': '+msg.text,'imp-chat-line'));
+   const votes=el('div',null,'imp-roster');votes.append(el('strong','Votes (visible to everyone)'));
+   if(!data.votes?.length)votes.append(el('small','No votes yet'));
+   for(const vote of data.votes||[])votes.append(el('p',label(vote.uid)+' voted '+(vote.choice==='skip'?'to skip':('for '+label(vote.choice)))));
+   body.append(votes);renderHostKickList(data);
    if(me.alive){const input=el('input',null,'imp-say');input.placeholder='Discuss with the crew';input.maxLength=280;input.value=chatDraft;input.oninput=()=>chatDraft=input.value;
     const send=()=>{const text=chatDraft.trim();if(text){chatDraft='';perform('say',text);}};input.onkeydown=e=>{if(e.key==='Enter')send();};body.append(input,button('Send',send));
     if(!me.voted){const choices=el('div',null,'imp-actions');for(const p of players.filter(p=>p.alive)){const vote=button('Vote '+label(p.uid),()=>perform('vote',p.uid));vote.prepend(suitBadge(p,players));choices.append(vote);}choices.append(button('Skip vote',()=>perform('vote','skip')));body.append(choices);}else body.append(el('p','Vote recorded'));}
@@ -174,15 +198,20 @@ export function mountImposter({rpc,user,label,friends}){
   body.append(stage,el('small','Walk with WASD or arrows. Click the floor or drag to steer.'));
   if(!revealed){revealed=true;dialog.append(reveal(me.role,players,game.imposters,me.uid));}
   const actions=el('div',null,'imp-actions imp-world-actions');stage.append(actions);
-  if(game.lights_out){body.append(el('div','Power outage · Restore power in Electrical','imp-warning'));
-   if(me.alive&&maps[game.map].rooms[me.room]?.[0]==='Electrical')actions.append(button('Restore power',()=>perform('repair')));
-  }else if(me.alive&&me.role==='Imposter')actions.append(button('Cut power',()=>perform('sabotage')));
-  for(const p of players.filter(p=>p.uid!==me.uid&&p.room===me.room)){
-   if(Math.hypot(p.x-me.x,p.y-me.y)>13)continue;
-   if(me.alive&&me.role==='Imposter'&&p.alive&&p.role!=='Imposter')actions.append(button('Eliminate '+label(p.uid),()=>perform('kill',p.uid)));
+  if(game.lights_out){body.append(el('div','Power outage · Restore power in Electrical','imp-warning'));}
+  actionButtons={};
+  if(me.role==='Imposter'){
+   actionButtons.kill=button('Kill',()=>perform('kill_nearest'));
+   actionButtons.sabotage=button('Cut power',()=>perform('sabotage'));
+   actions.append(actionButtons.kill,actionButtons.sabotage);
   }
-  if(me.alive&&players.some(p=>p.body&&Math.hypot(p.x-me.x,p.y-me.y)<=15))actions.append(button('Report body',()=>perform('report')));
-  if(me.alive&&me.room===0&&!me.meeting_used)actions.append(button('Emergency meeting',()=>perform('meeting')));
+  actionButtons.report=button('Report body',()=>perform('report'));
+  actionButtons.meeting=button('Emergency meeting',()=>perform('meeting'));
+  actions.append(actionButtons.report,actionButtons.meeting);
+  if(game.lights_out&&maps[game.map].rooms[me.room]?.[0]==='Electrical'){
+   actionButtons.repair=button('Restore power',()=>perform('repair'));actions.append(actionButtons.repair);
+  }
+  updateActionButtons();
   if(me.role==='Innocent'){
    const remaining=me.todo.filter(i=>!me.done.includes(i));
    const list=el('details',null,'imp-task-list');list.open=tasksExpanded;list.ontoggle=()=>{tasksExpanded=list.open;};list.append(el('summary','Tasks · '+remaining.length));
@@ -192,7 +221,55 @@ export function mountImposter({rpc,user,label,friends}){
     const station=maps[game.map].rooms[me.room],near=Math.hypot(me.x-station[1],me.y-(station[2]-station[4]*.24))<=12;
     if(near)actions.append(taskPanel(me));else actions.append(el('span','Approach the marked console','imp-station-hint'));
    }
-  }else body.append(el('small','Kill ready '+new Date(me.next_kill).toLocaleTimeString()));
+  }
  }
- return {open(){if(!user())return;dialog.showModal();home();listTimer=setInterval(read,600);},close};
+ function kickPlayer(p){
+  if(window.confirm('Kick '+label(p.uid)+' from this lobby? They will not be able to rejoin it.'))perform('kick',p.uid);
+ }
+ function renderHostKickList(data){
+  if(data.me.uid!==data.game.host||data.game.phase==='lobby')return;
+  const details=el('details',null,'imp-kick-list');details.append(el('summary','Manage players'));
+  for(const p of data.players.filter(p=>p.joined&&p.uid!==data.me.uid)){
+   const row=el('div',null,'imp-row');row.append(el('span',label(p.uid)),button('Kick',()=>kickPlayer(p)));details.append(row);
+  }
+  body.append(details);
+ }
+ function renderLastVotes(data){
+  if(!Array.isArray(data.game.last_votes)||!data.game.last_votes.length)return;
+  const details=el('details',null,'imp-vote-recap');details.append(el('summary','Previous meeting votes'));
+  for(const vote of data.game.last_votes)details.append(el('p',label(vote.uid)+' voted '+(vote.choice==='skip'?'to skip':'for '+label(vote.choice))));
+  body.append(details);
+ }
+ function cooldownLeft(time){
+  const ms=Date.parse(time);return Number.isFinite(ms)?Math.max(0,Math.ceil((ms-Date.now())/1000)):0;
+ }
+ function updateActionButtons(){
+  if(!snapshot||snapshot.game.phase!=='play')return;
+  const {game,me,players}=snapshot,alive=!!me.alive;
+  const closest=players.filter(p=>p.uid!==me.uid&&p.alive&&p.role!=='Imposter'&&
+   Number.isFinite(p.x)&&Number.isFinite(p.y)&&Math.hypot(p.x-me.x,p.y-me.y)<=13)
+   .sort((a,b)=>Math.hypot(a.x-me.x,a.y-me.y)-Math.hypot(b.x-me.x,b.y-me.y))[0];
+  const killTime=cooldownLeft(me.next_kill);
+  if(actionButtons.kill){
+   actionButtons.kill.textContent=killTime?'Kill · '+killTime+'s':'Kill';
+   actionButtons.kill.disabled=busy||!alive||killTime>0||!closest;
+   actionButtons.sabotage.textContent=game.lights_out?'Power out':(cooldownLeft(game.sabotage_ready)?'Sabotage · '+cooldownLeft(game.sabotage_ready)+'s':'Cut power');
+   actionButtons.sabotage.disabled=busy||!alive||game.lights_out||cooldownLeft(game.sabotage_ready)>0;
+  }
+  const reportable=players.some(p=>p.body&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&Math.hypot(p.x-me.x,p.y-me.y)<=15);
+  if(actionButtons.report)actionButtons.report.disabled=busy||!alive||!reportable;
+  const meetingTime=cooldownLeft(game.meeting_ready_at);
+  if(actionButtons.meeting){
+   actionButtons.meeting.textContent=me.meeting_used?'Meeting used':meetingTime?'Meeting · '+meetingTime+'s':'Emergency meeting';
+   actionButtons.meeting.disabled=busy||!alive||me.meeting_used||me.room!==0||meetingTime>0;
+  }
+  if(actionButtons.repair)actionButtons.repair.disabled=busy||!alive;
+ }
+ return {open(id=null){
+  if(!user())return;
+  if(!dialog.open)dialog.showModal();
+  if(id){if(gameId!==id)enter(id,false);}else if(!gameId)home();
+  clearInterval(listTimer);listTimer=setInterval(read,600);
+  clearInterval(uiTimer);uiTimer=setInterval(updateActionButtons,200);
+ },close};
 }
