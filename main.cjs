@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { repository, verifyManifest } = require('./update-security.cjs');
+const { checkForAvailableUpdate } = require('./updater-check.cjs');
 
 // Retain the existing installation's login, settings, and updater configuration.
 const legacyData = ['PocketChat', 'pocketchat'].map(name => path.join(app.getPath('appData'), name));
@@ -51,8 +52,8 @@ async function checkUpdates() {
   checking = true;
   announce({ status: 'Checking for updates…', busy: true });
   try {
-    const result = await updater.checkForUpdates();
-    if (result && result.isUpdateAvailable) {
+    const { result, available } = await checkForAvailableUpdate(updater);
+    if (available) {
       verifyManifest(result.updateInfo, fs.readFileSync(path.join(__dirname, 'build/update-public-key.pem')));
       announce({ status: 'Verified update. Downloading…', busy: true });
       await updater.downloadUpdate(); // electron-updater checks the SHA-512 covered by our signature.
