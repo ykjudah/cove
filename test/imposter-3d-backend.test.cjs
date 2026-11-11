@@ -77,3 +77,53 @@ test('3D shuttle walking, expanded cosmetics, vents and wire repair coexist with
   assert.equal(again.game.round_number,2);
  }finally{await db.close();}
 });
+
+
+test('supports all three recovered 3D maps and their correct Electrical rooms',async()=>{
+ const {db,user}=await create();
+ try{
+  await db.exec('reset role');
+  for(const file of [
+   'upgrade-imposter.sql','upgrade-imposter-walk.sql','upgrade-keel-feedback.sql',
+   'upgrade-imposter-smooth-movement.sql','upgrade-imposter-lobby-controls.sql',
+   'upgrade-imposter-ship-lobby.sql','upgrade-imposter-3d-compat.sql'
+  ])await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
+  const run=async(index,g,act,arg='')=>{
+   await user(index);
+   return (await db.query('select public.imp_3d_action($1,$2,$3) result',[g,act,arg])).rows[0].result;
+  };
+  await user(0);
+  const game=(await db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
+   ['Caldera',1,5,2,20,'Three Dimensional Maps',30])).rows[0].id;
+  let state=await run(0,game,'read');
+  assert.equal(state.game.map,'Caldera');
+  await run(1,game,'join');
+  await run(2,game,'join');
+  const settings={map:'Frostline',imposters:1,cooldown:5,tasks:2,vote_seconds:20,
+    name:'Frostline Expedition',meeting_cooldown:30,vent_cooldown:20};
+  state=await run(0,game,'configure',JSON.stringify(settings));
+  assert.equal(state.game.map,'Frostline');
+  assert.equal(state.game.name,'Frostline Expedition');
+  assert.equal(state.game.vent_cooldown,20);
+  await assert.rejects(run(1,game,'configure',JSON.stringify(settings)),/host/i);
+  await assert.rejects(run(0,game,'configure',JSON.stringify({...settings,map:'Unknown'})),/3D map/i);
+  state=await run(0,game,'start');
+  assert.equal(state.game.map,'Frostline');
+  assert.equal(state.game.phase,'play');
+  await db.exec('reset role');
+  await db.query('update private.imp_games set lights_out=true where id=$1',[game]);
+  const good=(await db.query('select uid from private.imp_seats where game=$1 and role=\'Innocent\' limit 1',[game])).rows[0].uid;
+  await db.query('update private.imp_seats set x=148,y=148,room=2 where game=$1 and uid=$2',[game,good]);
+  const id=(await db.query('select uid from private.imp_seats where game=$1 order by uid',[game])).rows.map(x=>x.uid);
+  const idx=id.indexOf(good);
+  state=await run(idx,game,'repair_begin');
+  assert.equal(state.me.repair_order.length,4);
+  assert.equal(new Set(state.me.repair_order).size,4);
+  const connections=[0,1,2,3].map(i=>state.me.repair_order.indexOf(i));
+  await assert.rejects(run(idx,game,'repair',JSON.stringify({
+   token:state.me.repair_token,connections:[99,99,99,99]
+  })),/Connect matching wires first|Invalid repair/);
+  state=await run(idx,game,'repair',JSON.stringify({token:state.me.repair_token,connections}));
+  assert.equal(state.game.lights_out,false);
+ }finally{await db.close();}
+});
