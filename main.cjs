@@ -29,7 +29,7 @@ function setTray(enabled){
   return true;
 }
 app.on('before-quit',()=>{quitting=true;});
-let updateState = { version: require('./release-config.json').displayVersion || app.getVersion(), repository: '', status: 'Update source not configured', ready: false, busy: false };
+let updateState = { version: require('./release-config.json').displayVersion || app.getVersion(), installedVersion: app.getVersion(), repository: '', status: 'Update source not configured', ready: false, busy: false };
 const pageUrl = pathToFileURL(path.join(__dirname, 'index.html')).href;
 function announce(patch) {
   updateState = { ...updateState, ...patch };
@@ -56,7 +56,10 @@ async function checkUpdates() {
       verifyManifest(result.updateInfo, fs.readFileSync(path.join(__dirname, 'build/update-public-key.pem')));
       announce({ status: 'Verified update. Downloading…', busy: true });
       await updater.downloadUpdate(); // electron-updater checks the SHA-512 covered by our signature.
-    } else announce({ status: 'Cove is up to date', busy: false });
+    } else {
+      const latest = result?.updateInfo?.version;
+      announce({ status: latest ? `Cove is up to date (installed ${app.getVersion()}, latest ${latest})` : 'Cove is up to date', busy: false });
+    }
   } catch (e) {
     const status = /404|latest release|No published/i.test(e.message) ? 'No published update found yet' : 'Update check failed: ' + e.message.slice(0, 180);
     announce({ status, busy: false, ready: false });
