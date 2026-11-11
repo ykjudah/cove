@@ -3,7 +3,7 @@
 export function bridgeImposterRpc(rpc) {
   return async (name, params={}) => {
     if (name === 'imp_list') return rpc('imp_list_v2', {});
-    if (name === 'imp_create') return rpc('imp_create_v2', {
+    if (name === 'imp_create') return rpc('imp_create_3d', {
       ...params, lobby_name: params.lobby_name || 'My Imposter Lobby',
       meeting_cooldown_seconds: params.meeting_cooldown_seconds ?? 30
     });
