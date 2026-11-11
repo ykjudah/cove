@@ -54,8 +54,8 @@ test('3D client uses new server APIs and server-authoritative kills',async()=>{
   assert.equal(calls[0].name,'imp_list_v2');
   assert.equal(calls[1].name,'imp_create_v2');
   assert.equal(calls[1].args.meeting_cooldown_seconds,30);
-  assert.equal(calls[2].name,'imp_steps_v2');
-  assert.equal(calls[3].name,'imp_action_v2');
+  assert.equal(calls[2].name,'imp_steps_3d');
+  assert.equal(calls[3].name,'imp_3d_action');
   assert.equal(calls[3].args.act,'kill_nearest');
   assert.equal(calls[3].args.arg,'');
   assert.equal(calls[4].args.act,'read');
