@@ -163,7 +163,7 @@ export function mountImposter({rpc,user,label,friends}){
    return;
   }
   if(!scene){scene=createScene(game.map,data,label,async(revision,steps)=>{
-   if(busy||!dialog.open)return;try{return await rpc('imp_steps',{game_id:gameId,revision,steps});}catch(e){error(e);return null;}
+   if(busy||!dialog.open)return;try{return await rpc('imp_steps_v2',{game_id:gameId,revision,steps});}catch(e){error(e);return null;}
   },async()=>{if(busy||!dialog.open)return null;try{return await rpc('imp_nearby',{game_id:gameId});}catch{return null;}});}
   scene.update(data);
   const stage=el('div',null,'imp-stage');stage.append(scene.canvas,hud);hud.classList.add('imp-world-hud');
