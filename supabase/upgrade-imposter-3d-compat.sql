@@ -30,6 +30,46 @@ begin
 end $$;
 revoke all on function private.imp_3d_lobby_clear(real,real) from public,anon,authenticated;
 
+
+-- The legacy 3D client has a single independent shuttle at (350,94),
+-- regardless of the round map. Do not change the v2 lobby respawn behavior:
+-- older 2D clients still use their selected map's room 0.
+create or replace function private.imp_3d_ensure_shuttle(game_id uuid,seat_user uuid)
+returns void language plpgsql security definer set search_path='' as $
+declare slot int;
+begin
+ if seat_user is null then return;end if;
+ slot:=get_byte(uuid_send(seat_user),15);
+ update private.imp_seats s
+ set x=350+(slot%5-2)*3,y=94+((slot/5)%3-1)*3,room=0,
+     move_rev=move_rev+1,move_epoch=move_epoch+1,
+     move_credit=12,walked_at=clock_timestamp()
+ where s.game=game_id and s.uid=seat_user and s.joined
+   and exists(select 1 from private.imp_games g where g.id=game_id and g.phase='lobby')
+   and (s.x is null or s.y is null
+        or abs(s.x-350)>52 or abs(s.y-94)>50
+        or abs(s.x-350)+abs(s.y-94)>97);
+end $;
+revoke all on function private.imp_3d_ensure_shuttle(uuid,uuid)
+ from public,anon,authenticated;
+
+-- The creator must be placed inside the same walkable shuttle as joiners.
+create or replace function public.imp_create_3d(
+ map_name text,imposters int,cooldown int,task_count int,vote_seconds int,
+ lobby_name text,meeting_cooldown_seconds int
+) returns uuid language plpgsql security definer set search_path='' as $
+declare new_game uuid;
+begin
+ new_game:=public.imp_create_v2(map_name,imposters,cooldown,task_count,
+  vote_seconds,lobby_name,meeting_cooldown_seconds);
+ perform private.imp_3d_ensure_shuttle(new_game,auth.uid());
+ return new_game;
+end $;
+revoke all on function public.imp_create_3d(text,int,int,int,int,text,int)
+ from public,anon;
+grant execute on function public.imp_create_3d(text,int,int,int,int,text,int)
+ to authenticated;
+
 create or replace function public.imp_steps_3d(game_id uuid,revision bigint,steps jsonb)
 returns jsonb language plpgsql security definer set search_path='' as $$
 <<batch>>
@@ -78,7 +118,18 @@ begin
  if auth.uid() is null then raise exception 'Sign in first';end if;
  select * into g from private.imp_games where id=game_id for update;
  if not found then raise exception 'Match unavailable';end if;
- if act='join' then return public.imp_action_v2(game_id,act,arg);end if;
+ if act='join' then
+  result:=public.imp_action_v2(game_id,act,arg);
+  perform private.imp_3d_ensure_shuttle(game_id,auth.uid());
+  return public.imp_action_v2(game_id,'read','');
+ end if;
+ if act='read' then
+  -- v2 housekeeping may have just finished a round and teleported players
+  -- to map room 0. Normalize only this 3D caller back into the shuttle.
+  result:=public.imp_action_v2(game_id,'read','');
+  perform private.imp_3d_ensure_shuttle(game_id,auth.uid());
+  return public.imp_action_v2(game_id,'read','');
+ end if;
  select * into s from private.imp_seats where game=game_id and uid=auth.uid() and joined for update;
  if not found then raise exception 'Join this lobby first';end if;
  if act='cosmetic' then
