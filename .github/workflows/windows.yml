@@ -25,6 +25,33 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Restore original verified 3D Imposter from Cove 1.7.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $seven = if (Test-Path 'C:\Program Files\7-Zip\7z.exe') { 'C:\Program Files\7-Zip\7z.exe' } else { (Get-Command 7z -ErrorAction Stop).Source }
+          $installer = Join-Path $env:RUNNER_TEMP 'Cove-1.7.0-Setup-x64.exe'
+          $folder = Join-Path $env:RUNNER_TEMP 'cove-3d-source'
+          New-Item -Force -ItemType Directory -Path $folder | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/ykjudah/cove/releases/download/v1.7.0/Cove-1.7.0-Setup-x64.exe' -OutFile $installer
+          & $seven x -y "-o$folder" $installer | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract original Cove 1.7.0 installer' }
+          $asar = Get-ChildItem $folder -Recurse -File -Filter app.asar | Select-Object -First 1
+          if (-not $asar) {
+            $archives = @(Get-ChildItem $folder -Recurse -File -Filter '*.7z')
+            $i=0
+            foreach ($archive in $archives) {
+              $target=Join-Path $env:RUNNER_TEMP "cove-3d-payload-$i"
+              & $seven x -y "-o$target" $archive.FullName | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Failed unpacking $($archive.FullName)" }
+              $asar = Get-ChildItem $target -Recurse -File -Filter app.asar | Select-Object -First 1
+              if ($asar) { break }
+              $i++
+            }
+          }
+          if (-not $asar) { throw 'Original 3D app.asar not found in historical installer' }
+          node scripts/restore-imposter-3d.cjs $asar.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: npm test
       - name: Check release tag and signing configuration
         if: startsWith(github.ref, 'refs/tags/')
