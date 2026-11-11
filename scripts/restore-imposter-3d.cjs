@@ -95,6 +95,13 @@ replace('    return { open() {\n      if (!user()) return;\n      dialog.showMod
   '    return { open(id = null) {\n      if (!user()) return;\n      if (!dialog.open) dialog.showModal();\n      if (id) enter2(id, false); else home();\n      clearInterval(listTimer);\n      listTimer = setInterval(read, 600);\n    }, close };',
   'direct round invitation');
 
+replace('        body.append(row);\n      }\n    }\n    function settings(editing = false) {',
+  '        if (g.is_admin) row.append(button("Delete game", async () => {\n          if (!window.confirm("Delete this Imposter game for everyone?")) return;\n          try { await rpc("imp_delete_game", {game_id:g.id}); last = ""; await read(); } catch (e) { error2(e); }\n        }));\n        body.append(row);\n      }\n    }\n    function settings(editing = false) {',
+  'admin lobby deletion');
+replace('      body.replaceChildren(top);\n      if (game.phase === "lobby") {',
+  '      body.replaceChildren(top);\n      if (me2.uid === game.host && game.phase !== "lobby") {\n        const manage=el("details",null,"imp-kick-list"); manage.append(el("summary","Manage players"));\n        for (const p of players.filter(p=>p.joined && p.uid!==me2.uid)) {\n          const row=el("div",null,"imp-row"); row.append(el("span",label(p.uid)),button("Kick",()=>{\n            if(window.confirm("Kick "+label(p.uid)+" from this match?")) perform("kick",p.uid);\n          })); manage.append(row);\n        }\n        body.append(manage);\n      }\n      if (game.phase === "lobby") {',
+  'host kicks in active rounds');
+
 game += '\n  globalThis.CoveImposter3D = Object.freeze({mountImposter});\n})();\n';
 const root = path.resolve(__dirname, '..');
 fs.writeFileSync(path.join(root, 'imposter-3d-legacy.js'), game);
