@@ -67,7 +67,9 @@ test('Imposter v2 lobbies persist across rounds, track votes, enforce cooldowns 
   const returned=await act(0,g,'read');
   assert.equal(returned.game.phase,'lobby');
   assert.equal(returned.game.name,'Friday Crew Reloaded');
-  assert.ok(returned.players.every(p=>p.alive&&p.role==null));
+  await db.exec('reset role');
+  const seats=(await db.query('select alive,role from private.imp_seats where game=$1',[g])).rows;
+  assert.ok(seats.every(p=>p.alive&&p.role==null));
   assert.equal(returned.game.round_number,1);
   const next=await act(0,g,'start');
   assert.equal(next.game.phase,'play');
