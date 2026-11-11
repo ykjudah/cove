@@ -90,7 +90,8 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
   ])await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
   const run=async(index,g,act,arg='')=>{
    await user(index);
-   return (await db.query('select public.imp_3d_action($1,$2,$3) result',[g,act,arg])).rows[0].result;
+   try{return (await db.query('select public.imp_3d_action($1,$2,$3) result',[g,act,arg])).rows[0].result;}
+   catch(err){err.message='3D '+act+' action: '+err.message;throw err;}
   };
   await user(0);
   const game=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
