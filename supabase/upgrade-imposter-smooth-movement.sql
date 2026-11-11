@@ -1,7 +1,8 @@
--- Correct Cove Imposter movement reconciliation under latency.
+-- Introduce backward-compatible v2 movement reconciliation under latency.
+-- Keep public.imp_steps unchanged for older Cove installations.
 -- Run once after upgrade-keel-feedback.sql on existing installations.
 begin;
-create or replace function public.imp_steps(game_id uuid,revision bigint,steps jsonb) returns jsonb
+create or replace function public.imp_steps_v2(game_id uuid,revision bigint,steps jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
 <<step_batch>>
 declare z private.imp_games;s private.imp_seats;v jsonb;dx real;dy real;dist real;credit real;x real;y real;room_id int;stamp timestamptz;
@@ -34,5 +35,7 @@ begin
    where p.game=game_id and p.uid=s.uid returning * into s;
  end if;
  return jsonb_build_object('x',s.x,'y',s.y,'revision',s.move_rev);
-end $$;
+end $;
+revoke all on function public.imp_steps_v2(uuid,bigint,jsonb) from public,anon;
+grant execute on function public.imp_steps_v2(uuid,bigint,jsonb) to authenticated;
 commit;
