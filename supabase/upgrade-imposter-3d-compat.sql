@@ -35,7 +35,7 @@ revoke all on function private.imp_3d_lobby_clear(real,real) from public,anon,au
 -- regardless of the round map. Do not change the v2 lobby respawn behavior:
 -- older 2D clients still use their selected map's room 0.
 create or replace function private.imp_3d_ensure_shuttle(game_id uuid,seat_user uuid)
-returns void language plpgsql security definer set search_path='' as $
+returns void language plpgsql security definer set search_path='' as $$
 declare slot int;
 begin
  if seat_user is null then return;end if;
@@ -49,7 +49,7 @@ begin
    and (s.x is null or s.y is null
         or abs(s.x-350)>52 or abs(s.y-94)>50
         or abs(s.x-350)+abs(s.y-94)>97);
-end $;
+end $$;
 revoke all on function private.imp_3d_ensure_shuttle(uuid,uuid)
  from public,anon,authenticated;
 
@@ -57,14 +57,14 @@ revoke all on function private.imp_3d_ensure_shuttle(uuid,uuid)
 create or replace function public.imp_create_3d(
  map_name text,imposters int,cooldown int,task_count int,vote_seconds int,
  lobby_name text,meeting_cooldown_seconds int
-) returns uuid language plpgsql security definer set search_path='' as $
+) returns uuid language plpgsql security definer set search_path='' as $$
 declare new_game uuid;
 begin
  new_game:=public.imp_create_v2(map_name,imposters,cooldown,task_count,
   vote_seconds,lobby_name,meeting_cooldown_seconds);
  perform private.imp_3d_ensure_shuttle(new_game,auth.uid());
  return new_game;
-end $;
+end $$;
 revoke all on function public.imp_create_3d(text,int,int,int,int,text,int)
  from public,anon;
 grant execute on function public.imp_create_3d(text,int,int,int,int,text,int)
