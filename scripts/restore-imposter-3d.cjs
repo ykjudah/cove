@@ -30,6 +30,10 @@ function archiveFile(target) {
 }
 const oldBundle = archiveFile('app.js').toString('utf8');
 const license = archiveFile('IMPOSTER-3D-LICENSES.txt');
+const originalStyles = archiveFile('style.css').toString('utf8');
+const legacyCss = originalStyles.split(/\r?\n/).slice(451).join('\n');
+if (!legacyCss.includes('.imp-wardrobe-panel') || !legacyCss.includes('.imp-wire-board') || !legacyCss.includes('.imp-meeting-tablet'))
+  throw Error('Original 3D game CSS is missing or changed');
 const cut = oldBundle.indexOf('  // src/app.js');
 if (cut < 0 || !oldBundle.startsWith('(() => {') ||
   !oldBundle.includes('function createScene3D(') || !oldBundle.includes('function mountImposter('))
@@ -64,5 +68,6 @@ game += '\n  globalThis.CoveImposter3D = Object.freeze({mountImposter});\n})();\
 const root = path.resolve(__dirname, '..');
 fs.writeFileSync(path.join(root, 'imposter-3d-legacy.js'), game);
 fs.writeFileSync(path.join(root, 'IMPOSTER-3D-LICENSES.txt'), license);
+fs.writeFileSync(path.join(root, 'imposter-3d-legacy.css'), legacyCss);
 cp.execFileSync(process.execPath, ['--check', path.join(root, 'imposter-3d-legacy.js')]);
 console.log('Recovered original Three.js game from pinned Cove 1.7.0 package (' + game.length + ' characters)');
