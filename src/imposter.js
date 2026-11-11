@@ -74,6 +74,17 @@ export function mountImposter({rpc,user,label,friends}){
  let actionButtons={};
  let scene=null,revealed=false,mapOpen=false,tasksExpanded=true;
  function stopScene(){scene?.destroy();scene=null;actionButtons={};}
+ function ensureScene(data){
+  if(!scene)scene=createScene(data.game.map,data,label,async(revision,steps)=>{
+   if(busy||!dialog.open)return null;
+   try{return await rpc('imp_steps_v2',{game_id:gameId,revision,steps});}catch(e){error(e);return null;}
+  },async()=>{
+   if(busy||!dialog.open)return null;
+   try{return await rpc('imp_nearby',{game_id:gameId});}catch{return null;}
+  });
+  scene.update(data);
+  return scene;
+ }
  function reset(){stopScene();revealed=false;mapOpen=false;token++;gameId=null;snapshot=null;busy=false;reading=false;task=null;config=false;last='';chatDraft='';status.textContent='';}
  dialog.addEventListener('close',()=>{clearInterval(listTimer);clearInterval(uiTimer);reset();});
  const close=()=>{if(dialog.open)dialog.close();};
@@ -92,10 +103,12 @@ export function mountImposter({rpc,user,label,friends}){
   catch(e){if(t===token)error(e);}finally{if(t===token)busy=false;}
  }
  function apply(data){
+  const previousPhase=snapshot?.game.phase;
+  if(previousPhase&&previousPhase!==data.game.phase&&(previousPhase==='lobby'||data.game.phase==='lobby'))stopScene();
   snapshot=data;scene?.update(data);const station=maps[data.game.map].rooms[data.me.room];
   const proximity=[station&&Math.hypot(data.me.x-station[1],data.me.y-(station[2]-station[4]*.24))<=12,...data.players.map(p=>[p.uid,Math.hypot(p.x-data.me.x,p.y-data.me.y)<=13,Math.hypot(p.x-data.me.x,p.y-data.me.y)<=15])];
   const key=JSON.stringify(data,(k,v)=>['x','y','walked_at','move_rev','move_credit'].includes(k)?undefined:v)+JSON.stringify(proximity);if(key===last)return;last=key;
-  if(data.game.phase!=='play'){task=null;stopScene();}
+  if(!['play','lobby'].includes(data.game.phase)){task=null;stopScene();}
   if(data.game.phase==='lobby')revealed=false;
   const focused=document.activeElement?.classList.contains('imp-say');renderMatch(data);updateActionButtons();
   if(focused){const input=body.querySelector('.imp-say');input?.focus();input?.setSelectionRange(input.value.length,input.value.length);}
@@ -152,21 +165,47 @@ export function mountImposter({rpc,user,label,friends}){
   else top.append(button('Leave lobby',()=>perform('leave')));
   body.replaceChildren(top);
   if(game.phase==='lobby'){
-   body.append(el('h3','Lobby · '+(game.name||game.map)),el('p',game.imposters+' imposter(s) · '+game.tasks+' tasks each · '+game.cooldown+'s kill cooldown · '+game.meeting_cooldown+'s meeting cooldown · '+game.vote_seconds+'s voting'));
-   const crew=el('div',null,'imp-roster');
-   for(const p of players){const tile=el('div',null,'imp-member');
-    tile.append(suitBadge(p,players),el('span',label(p.uid)+(p.uid===game.host?' · Host':'')+(p.joined?' · Ready':' · Invited')));
-    if(me.uid===game.host&&p.uid!==me.uid)tile.append(button('Kick',()=>kickPlayer(p)));
-    crew.append(tile);
-   }body.append(crew);
-   const dressing=el('div',null,'imp-dressing');dressing.append(el('h3','Your suit'));
+   // The ship remains the actual lobby, with movement and other players live.
+   const ship=ensureScene(data),stage=el('div',null,'imp-stage imp-lobby-stage');
+   stage.append(ship.canvas);
+   const roomName=maps[game.map].rooms[me.room]?.[0]||'Passage';
+   const bar=el('div',null,'imp-scene-bar');
+   const mapButton=button(mapOpen?'Close map':'Map',()=>{mapOpen=!mapOpen;renderMatch(snapshot);});
+   bar.append(el('b',roomName),mapButton);stage.append(bar);
+   if(mapOpen){const overview=board(data);overview.classList.add('imp-overview');stage.append(overview);}
+   const overlay=el('aside',null,'imp-lobby-controls');
+   overlay.append(el('strong','Waiting in '+(game.name||game.map)),
+    el('small',players.filter(p=>p.joined).length+' joined · '+game.imposters+' imposter(s) · '+game.tasks+' tasks each'));
+   const dressing=el('section',null,'imp-dressing imp-lobby-dressing');
+   dressing.append(el('strong','Customize your character'));
    const colors=el('div',null,'imp-swatches');
    const colorNames=['Coral','Green','Blue','Gold','Violet','Pink','Teal','Pearl','Copper','Olive','Slate','Peach'];
-   suits.forEach((hex,i)=>{const swatch=button('',()=>perform('cosmetic',JSON.stringify({suit:i,hat:me.hat||'none'})));swatch.style.backgroundColor=hex;swatch.setAttribute('aria-label',colorNames[i]);swatch.title=colorNames[i];swatch.setAttribute('aria-pressed',String(i===me.suit));swatch.disabled=players.some(p=>p.uid!==me.uid&&p.joined&&p.suit===i);colors.append(swatch);});
-   const hat=option('Hat',['none','antenna','cap','sprout','horn'],me.hat||'none');hat[1].onchange=()=>perform('cosmetic',JSON.stringify({suit:me.suit??0,hat:hat[1].value}));
-   dressing.append(colors,hat[0]);body.append(dressing);
-   if(me.uid===game.host){body.append(button('Lobby settings',()=>settings(true)));
-    const start=button('Start match',()=>perform('start'));start.disabled=players.filter(p=>p.joined).length<game.imposters*2+1;body.append(start,el('small','At least '+(game.imposters*2+1)+' joined players required.'));}
+   suits.forEach((hex,i)=>{
+    const swatch=button('',()=>perform('cosmetic',JSON.stringify({suit:i,hat:me.hat||'none'})));
+    swatch.style.backgroundColor=hex;swatch.setAttribute('aria-label',colorNames[i]);
+    swatch.title=colorNames[i];swatch.setAttribute('aria-pressed',String(i===me.suit));
+    swatch.disabled=players.some(p=>p.uid!==me.uid&&p.joined&&p.suit===i);colors.append(swatch);
+   });
+   const hat=option('Hat',['none','antenna','cap','sprout','horn'],me.hat||'none');
+   hat[1].onchange=()=>perform('cosmetic',JSON.stringify({suit:me.suit??0,hat:hat[1].value}));
+   dressing.append(colors,hat[0]);overlay.append(dressing);
+   const roster=el('details',null,'imp-lobby-roster');
+   roster.append(el('summary','Crew · '+players.filter(p=>p.joined).length));
+   for(const p of players){const tile=el('div',null,'imp-member');
+    tile.append(suitBadge(p,players),el('span',label(p.uid)+(p.uid===game.host?' · Host':'')+(p.joined?' · Joined':' · Invited')));
+    if(me.uid===game.host&&p.uid!==me.uid&&p.joined)tile.append(button('Kick',()=>kickPlayer(p)));
+    roster.append(tile);
+   }
+   overlay.append(roster);
+   if(me.uid===game.host){
+    const hostActions=el('div',null,'imp-lobby-host-actions');
+    hostActions.append(button('Lobby settings',()=>{stopScene();settings(true);}));
+    const start=button('Start match',()=>perform('start'));
+    start.disabled=players.filter(p=>p.joined).length<game.imposters*2+1;
+    hostActions.append(start);
+    overlay.append(hostActions,el('small','At least '+(game.imposters*2+1)+' joined players required to start.'));
+   }else overlay.append(el('small','Waiting for the host to start the match.'));
+   stage.append(overlay);body.append(stage,el('small','Walk around the ship with WASD or arrow keys. Change your suit and hat while waiting.'));
    return;
   }
   if(game.phase==='finished'){body.append(outcome(data,label),el('p','Returning everyone to the lobby shortly…'));renderLastVotes(data);renderHostKickList(data);return;}
@@ -186,10 +225,7 @@ export function mountImposter({rpc,user,label,friends}){
     if(!me.voted){const choices=el('div',null,'imp-actions');for(const p of players.filter(p=>p.alive)){const vote=button('Vote '+label(p.uid),()=>perform('vote',p.uid));vote.prepend(suitBadge(p,players));choices.append(vote);}choices.append(button('Skip vote',()=>perform('vote','skip')));body.append(choices);}else body.append(el('p','Vote recorded'));}
    return;
   }
-  if(!scene){scene=createScene(game.map,data,label,async(revision,steps)=>{
-   if(busy||!dialog.open)return;try{return await rpc('imp_steps_v2',{game_id:gameId,revision,steps});}catch(e){error(e);return null;}
-  },async()=>{if(busy||!dialog.open)return null;try{return await rpc('imp_nearby',{game_id:gameId});}catch{return null;}});}
-  scene.update(data);
+  ensureScene(data);
   const stage=el('div',null,'imp-stage');stage.append(scene.canvas,hud);hud.classList.add('imp-world-hud');
   const roomName=maps[game.map].rooms[me.room]?.[0]||'Passage';
   const bar=el('div',null,'imp-scene-bar');const mapButton=button(mapOpen?'Close map':'Map',()=>{mapOpen=!mapOpen;renderMatch(snapshot);});
