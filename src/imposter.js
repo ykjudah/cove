@@ -180,7 +180,7 @@ export function mountImposter({rpc,user,label,friends}){
    const votes=el('div',null,'imp-roster');votes.append(el('strong','Votes (visible to everyone)'));
    if(!data.votes?.length)votes.append(el('small','No votes yet'));
    for(const vote of data.votes||[])votes.append(el('p',label(vote.uid)+' voted '+(vote.choice==='skip'?'to skip':('for '+label(vote.choice)))));
-   body.append(votes);renderHostKickList(data);
+   body.append(votes);
    if(me.alive){const input=el('input',null,'imp-say');input.placeholder='Discuss with the crew';input.maxLength=280;input.value=chatDraft;input.oninput=()=>chatDraft=input.value;
     const send=()=>{const text=chatDraft.trim();if(text){chatDraft='';perform('say',text);}};input.onkeydown=e=>{if(e.key==='Enter')send();};body.append(input,button('Send',send));
     if(!me.voted){const choices=el('div',null,'imp-actions');for(const p of players.filter(p=>p.alive)){const vote=button('Vote '+label(p.uid),()=>perform('vote',p.uid));vote.prepend(suitBadge(p,players));choices.append(vote);}choices.append(button('Skip vote',()=>perform('vote','skip')));body.append(choices);}else body.append(el('p','Vote recorded'));}
