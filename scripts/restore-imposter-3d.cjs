@@ -55,6 +55,9 @@ replace('          await perform("cleanup");\n          home();',
   '          finishTimer = null;\n          await perform("read");',
   'persistent lobby after results');
 replace('Returning to Open Games in ', 'Returning to the ship in ', 'result description');
+replace('        if (act === "leave" || act === "cleanup") {',
+  '        if (act === "leave" || act === "cleanup" || act === "close") {',
+  'close lobby return to game browser');
 replace('row.append(el("strong", g.map), el("span", label(g.host) + " \\xB7 " + g.players + " joined \\xB7 " + g.phase), button(g.joined ? "Open" : "Join game", () => enter2(g.id, !g.joined)));',
   'row.append(el("strong", g.name || g.map), el("span", label(g.host) + " \\xB7 " + g.players + " joined \\xB7 " + g.phase), button(g.joined ? "Open" : "Join game", () => enter2(g.id, !g.joined)));',
   'named lobby browser');
