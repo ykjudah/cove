@@ -67,6 +67,11 @@ replace('      top.append(button("Controls", controls), button("\\u2190 Open Gam
 replace('        tablet.append(chat, voting);',
   '        if (Array.isArray(data.votes) && data.votes.length) {\n          const summary = el("details", null, "imp-vote-recap");\n          summary.append(el("summary", "Votes cast \\u00b7 " + data.votes.length));\n          for (const vote of data.votes) summary.append(el("p", label(vote.uid) + " voted " + (vote.choice === "skip" ? "to skip" : "for " + label(vote.choice))));\n          chat.append(summary);\n        }\n        tablet.append(chat, voting);',
   'voting recap');
+// The recovered 1.7.0 binary still includes all three original 3D worlds.
+// The later Keel-only feedback build hid Caldera and Frostline from the UI.
+replace('option("Map", current.map && current.map !== "Keel" ? ["Keel", current.map] : ["Keel"], current.map || "Keel"),',
+  'option("Map", ["Keel", "Caldera", "Frostline"], current.map || "Keel"),',
+  'restore three selectable 3D maps');
 // Preserve newer named persistent lobbies and cooldown configuration.
 replace('option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15)\n      ];',
   'option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15),\n        option("Meeting cooldown (seconds)", [10, 20, 30, 45, 60, 90, 120], current.meeting_cooldown ?? 30)\n      ];',
