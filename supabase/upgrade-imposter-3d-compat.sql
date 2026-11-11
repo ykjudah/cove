@@ -73,7 +73,7 @@ create or replace function public.imp_3d_action(game_id uuid,act text,arg text d
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare g private.imp_games;s private.imp_seats;v jsonb;
  selected_color int;selected_hat text;vent int;destination int;dest_x real;dest_y real;dest_room int;
- wires jsonb;idx int;right_idx int;result jsonb;cooldown_input int;
+ wires jsonb;idx int;right_idx int;result jsonb;cooldown_input int;target_map text;
 begin
  if auth.uid() is null then raise exception 'Sign in first';end if;
  select * into g from private.imp_games where id=game_id for update;
@@ -92,13 +92,22 @@ begin
   return public.imp_action_v2(game_id,'read','');
  elsif act='configure' then
   if g.phase<>'lobby' or g.host<>s.uid then raise exception 'Only the host can change settings';end if;
-  v:=arg::jsonb;cooldown_input:=coalesce((v->>'vent_cooldown')::int,g.vent_cooldown);
+  v:=arg::jsonb;
+  target_map:=v->>'map';
+  cooldown_input:=coalesce((v->>'vent_cooldown')::int,g.vent_cooldown);
+  if target_map is null or target_map not in ('Keel','Caldera','Frostline')
+    then raise exception 'Choose an available 3D map';end if;
   if cooldown_input not between 0 and 90 then raise exception 'Invalid vent cooldown';end if;
-  result:=public.imp_action_v2(game_id,'configure',arg);
-  update private.imp_games set vent_cooldown=cooldown_input where id=game_id;
+  -- The older base configure function is intentionally Keel-only. Reuse its
+  -- other host-only validation with the current map, then safely apply the
+  -- selected original 3D map while the lobby is still waiting.
+  result:=public.imp_action_v2(game_id,'configure',(v||jsonb_build_object('map',g.map))::text);
+  update private.imp_games set map=target_map,vent_cooldown=cooldown_input where id=game_id;
   return public.imp_action_v2(game_id,'read','');
  elsif act='repair_begin' then
-  if g.phase<>'play' or not s.alive or not g.lights_out or s.room<>5 or s.vent_node is not null
+  if g.phase<>'play' or not s.alive or not g.lights_out
+   or s.room<>(case g.map when 'Keel' then 5 when 'Caldera' then 3 else 2 end)
+   or s.vent_node is not null
     then raise exception 'Cannot repair power here';end if;
   update private.imp_seats set repair_token=gen_random_uuid(),
     repair_order=(select array_agg(i order by random()) from generate_series(0,3) i)
