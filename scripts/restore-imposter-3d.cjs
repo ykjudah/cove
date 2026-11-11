@@ -90,6 +90,11 @@ replace('      const stage2 = makeStage(data);',
   '      if (me2.uid === game.host) {\n        const management = el("details", null, "imp-kick-list"); management.append(el("summary", "Manage crew"));\n        for (const p of players.filter(p => p.uid !== me2.uid && p.joined)) {\n          const row = el("div", null, "imp-row");\n          row.append(el("span", label(p.uid)), button("Kick", () => { if (window.confirm("Kick " + label(p.uid) + " from this lobby?")) perform("kick", p.uid); }));\n          management.append(row);\n        }\n        body.append(management);\n      }\n      const stage2 = makeStage(data);',
   'host kicks');
 
+// Newer Cove can directly open an active round by game ID.
+replace('    return { open() {\n      if (!user()) return;\n      dialog.showModal();\n      home();\n      listTimer = setInterval(read, 600);\n    }, close };',
+  '    return { open(id = null) {\n      if (!user()) return;\n      if (!dialog.open) dialog.showModal();\n      if (id) enter2(id, false); else home();\n      clearInterval(listTimer);\n      listTimer = setInterval(read, 600);\n    }, close };',
+  'direct round invitation');
+
 game += '\n  globalThis.CoveImposter3D = Object.freeze({mountImposter});\n})();\n';
 const root = path.resolve(__dirname, '..');
 fs.writeFileSync(path.join(root, 'imposter-3d-legacy.js'), game);
