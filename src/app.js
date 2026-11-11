@@ -1,4 +1,5 @@
 import {mountImposter} from './imposter.js';
+import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
 import Calls from './calls.cjs';
@@ -1448,7 +1449,16 @@ for(const [id,key] of [['desktop-popups','cove-popups'],['tray-toggle','cove-tra
 if(desktop?.windows && $('tray-toggle').checked)desktop.setTray(true).catch(e=>notify(e.message));
 function desktopPopup(room,call){if(desktop?.windows && $('desktop-popups').checked)desktop.desktopNotice({room,call}).catch(()=>{});}
 desktop?.openNotice?.(room=>{if(me&&rooms.some(r=>r.id===room))selectRoom(room).catch(e=>notify(e.message));});
-const imposter=mountImposter({rpc:async(name,args)=>checked(await client.rpc(name,args)),user:()=>me?.id,label:id=>personLabel(id),friends:()=>friendships.filter(r=>r.status==='accepted').map(r=>r.sender_id===me.id?r.recipient_id:r.sender_id).filter(id=>!blocks.has(id))});
+const recoveredGame=globalThis.CoveImposter3D?.mountImposter;
+const imposter=typeof recoveredGame==='function'
+  ? recoveredGame({
+      rpc:bridgeImposterRpc(async(name,args)=>checked(await client.rpc(name,args))),
+      user:()=>me?.id,
+      label:id=>personLabel(id),
+      friends:()=>friendships.filter(r=>r.status==='accepted').map(r=>r.sender_id===me.id?r.recipient_id:r.sender_id).filter(id=>!blocks.has(id))
+    })
+  : {open:()=>notify('The verified 3D Imposter files are missing from this build.'),close:()=>{}};
+// No 2D fallback: the 3D ship, gameplay and characters are required.
 const imposterOpenedRounds=new Map();
 $('open-games').onclick=()=>imposter.open();
 
