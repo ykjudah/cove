@@ -93,11 +93,15 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
    return (await db.query('select public.imp_3d_action($1,$2,$3) result',[g,act,arg])).rows[0].result;
   };
   await user(0);
-  const game=(await db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
+  const game=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
    ['Caldera',1,5,2,20,'Three Dimensional Maps',30])).rows[0].id;
   let state=await run(0,game,'read');
   assert.equal(state.game.map,'Caldera');
-  await run(1,game,'join');
+  assert.ok(Math.abs(state.me.x-350)<52&&Math.abs(state.me.y-94)<50,
+   'Caldera game creators must spawn inside the 3D shuttle, not in Caldera');
+  const guest=await run(1,game,'join');
+  assert.ok(Math.abs(guest.me.x-350)<52&&Math.abs(guest.me.y-94)<50,
+   'Caldera joiners must enter the shuttle before the match');
   await run(2,game,'join');
   const settings={map:'Frostline',imposters:1,cooldown:5,tasks:2,vote_seconds:20,
     name:'Frostline Expedition',meeting_cooldown:30,vent_cooldown:20};
@@ -125,5 +129,19 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
   })),/Connect matching wires first|Invalid repair/);
   state=await run(idx,game,'repair',JSON.stringify({token:state.me.repair_token,connections}));
   assert.equal(state.game.lights_out,false);
+  await db.exec('reset role');
+  await db.query("update private.imp_games set phase='finished',winner='Innocent',round_ends_at=clock_timestamp()-interval '1 second' where id=$1",[game]);
+  state=await run(0,game,'read');
+  assert.equal(state.game.phase,'lobby');
+  state=await run(0,game,'configure',JSON.stringify({...settings,map:'Caldera'}));
+  assert.equal(state.game.map,'Caldera');
+  const second=await run(0,game,'start');
+  assert.equal(second.game.round_number,2);
+  await db.exec('reset role');
+  await db.query("update private.imp_games set phase='finished',winner='Innocent',round_ends_at=clock_timestamp()-interval '1 second' where id=$1",[game]);
+  state=await run(0,game,'read');
+  assert.equal(state.game.phase,'lobby');
+  assert.ok(Math.abs(state.me.x-350)<52&&Math.abs(state.me.y-94)<50,
+   'Caldera round survivors must return to the 3D shuttle, not map room 0');
  }finally{await db.close();}
 });
