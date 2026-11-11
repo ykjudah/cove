@@ -1,6 +1,6 @@
 {
   "name": "pocketchat",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Cove \u2014 messages, calls, and games with friends",
   "author": "Cove",
   "private": true,
@@ -35,6 +35,7 @@
       "main.cjs",
       "preload.cjs",
       "update-security.cjs",
+      "updater-check.cjs",
       "release-config.json",
       "index.html",
       "style.css",
