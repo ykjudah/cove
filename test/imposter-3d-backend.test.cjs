@@ -38,6 +38,7 @@ test('3D shuttle walking, expanded cosmetics, vents and wire repair coexist with
   const started=await act(0,g,'start');
   assert.equal(started.game.phase,'play');
   assert.equal(started.game.round_number,1);
+  await db.exec('reset role');
   const rows=(await db.query('select uid,role from private.imp_seats where game=$1',[g])).rows;
   const killer=rows.find(x=>x.role==='Imposter');
   const innocent=rows.find(x=>x.role==='Innocent');
