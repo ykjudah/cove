@@ -778,7 +778,7 @@ function leave() {
  callView?.dispose();callView=null;
  customDrafts.clear();pictureDialog.close();draftEmojiPreview.hidden=true;
  mediaToken++;mediaBusy=false;closeMedia();customEmojis=[];emojiLoadedAt=0;emojiLoadRequest=null;mediaMetadata.clear();mediaCache.clear();mediaRequests.clear();
- stopSocialLive();imposter.close();
+ stopSocialLive();imposter.close();imposterOpenedRounds.clear();
   closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
   leaveTypingRoom(); clearInAppNotifications();
   epoch++; view++; selected = null; me = null; rooms = []; messages.clear(); drafts.clear(); pending.clear(); unread.clear(); parents.clear(); reactions.clear(); replyDrafts.clear(); reactionBusy.clear();
@@ -1209,7 +1209,7 @@ async function presenceTick(){
  const rows=checked(await client.rpc('presence_status',{player_ids:ids}));if(session!==epoch)return;for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});}
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
-function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,15000);refreshJoinableCalls();callListTimer=setInterval(refreshJoinableCalls,5000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(refreshActiveGames,10000);}
+function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(refreshJoinableCalls,5000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(refreshActiveGames,10000);}
 function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
@@ -1449,10 +1449,21 @@ if(desktop?.windows && $('tray-toggle').checked)desktop.setTray(true).catch(e=>n
 function desktopPopup(room,call){if(desktop?.windows && $('desktop-popups').checked)desktop.desktopNotice({room,call}).catch(()=>{});}
 desktop?.openNotice?.(room=>{if(me&&rooms.some(r=>r.id===room))selectRoom(room).catch(e=>notify(e.message));});
 const imposter=mountImposter({rpc:async(name,args)=>checked(await client.rpc(name,args)),user:()=>me?.id,label:id=>personLabel(id),friends:()=>friendships.filter(r=>r.status==='accepted').map(r=>r.sender_id===me.id?r.recipient_id:r.sender_id).filter(id=>!blocks.has(id))});
+const imposterOpenedRounds=new Map();
 $('open-games').onclick=()=>imposter.open();
 
 let impInviteTimer;
 async function impInviteCount(){
  const session=epoch;if(!me)return;
- try{const rows=checked(await client.rpc('imp_list'));if(epoch===session){const n=rows.filter(r=>!r.joined).length;$('imp-invites').textContent=n?n+' open':'';}}catch{}
+ try{
+  const rows=checked(await client.rpc('imp_list_v2'));
+  if(epoch!==session)return;
+  const n=rows.filter(r=>!r.joined&&r.phase==='lobby').length;
+  $('imp-invites').textContent=n?n+' open':'';
+  // When a host begins a new round, open the game for every joined player.
+  // A closed window stays closed for the rest of that round; do not nag users.
+  const active=rows.find(r=>r.joined&&r.round_number>0&&
+   ['play','meeting','finished'].includes(r.phase)&&imposterOpenedRounds.get(r.id)!==r.round_number);
+  if(active){imposterOpenedRounds.set(active.id,active.round_number);imposter.open(active.id);}
+ }catch{}
 }
