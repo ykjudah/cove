@@ -54,6 +54,21 @@ test('Imposter v2 lobbies persist across rounds, track votes, enforce cooldowns 
   assert.equal(resolved.game.last_votes.length,4);
   await assert.rejects(act(1,g,'meeting'),/cooldown/i);
 
+  // The server picks the nearest living, visible innocent (not a client-provided ID).
+  await db.exec('reset role');
+  const roles=(await db.query('select uid,role from private.imp_seats where game=$1',[g])).rows;
+  const killer=roles.find(p=>p.role==='Imposter');
+  const innocents=roles.filter(p=>p.role==='Innocent');
+  assert.equal(innocents.length,3);
+  await db.query("update private.imp_seats set x=350,y=94,room=0,next_kill=clock_timestamp()-interval '1 second' where game=$1 and uid=$2",[g,killer.uid]);
+  for(let i=0;i<innocents.length;i++)await db.query('update private.imp_seats set x=$1,y=94,room=0 where game=$2 and uid=$3',[352+i*7,g,innocents[i].uid]);
+  const killed=await act(ids.indexOf(killer.uid),g,'kill_nearest');
+  assert.equal(killed.game.phase,'play');
+  await db.exec('reset role');
+  const chosen=(await db.query('select alive from private.imp_seats where game=$1 and uid=$2',[g,innocents[0].uid])).rows[0];
+  assert.equal(chosen.alive,false);
+  await assert.rejects(act(ids.indexOf(innocents[1].uid),g,'kill_nearest'),/Kill unavailable/);
+
   await assert.rejects(act(1,g,'kick',ids[3]),/Only the host/i);
   const afterKick=await act(0,g,'kick',ids[3]);
   assert.ok(afterKick.players.every(p=>p.uid!==ids[3]));
@@ -79,6 +94,9 @@ test('Imposter v2 lobbies persist across rounds, track votes, enforce cooldowns 
   assert.equal(next.game.round_number,2);
 
   const second=await createLobby(1,'Another Game');
+  await act(2,second,'join');
+  await act(1,second,'kick',ids[2]);
+  await assert.rejects(act(2,second,'join'),/Lobby unavailable/i);
   await user(2);
   await assert.rejects(db.query('select imp_delete_game($1)',[second]),/Admin access required/);
   await user(0);
