@@ -71,6 +71,9 @@ test('Imposter v2 lobbies persist across rounds, track votes, enforce cooldowns 
   const seats=(await db.query('select alive,role from private.imp_seats where game=$1',[g])).rows;
   assert.ok(seats.every(p=>p.alive&&p.role==null));
   assert.equal(returned.game.round_number,1);
+  await assert.rejects(act(3,g,'join'),/Lobby unavailable|Join|Invitation|Unavailable/i);
+  await user(3);
+  await assert.rejects(db.query("select imp_action($1,'join','')",[g]),/Lobby unavailable/i);
   const next=await act(0,g,'start');
   assert.equal(next.game.phase,'play');
   assert.equal(next.game.round_number,2);
