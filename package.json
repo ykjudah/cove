@@ -1,7 +1,7 @@
 {
   "name": "pocketchat",
-  "version": "2.8.0",
-  "description": "Cove \u2014 messages, calls, and games with friends",
+  "version": "2.8.1",
+  "description": "Cove — messages, calls, and games with friends",
   "author": "Cove",
   "private": true,
   "main": "main.cjs",
@@ -10,7 +10,8 @@
     "start": "npm run bundle && electron .",
     "test": "node --test test/*.test.cjs",
     "dist": "npm run bundle && electron-builder --config electron-builder.cjs --win nsis --x64 --publish never",
-    "sign-update": "node scripts/sign-update.cjs"
+    "sign-update": "node scripts/sign-update.cjs",
+    "restore:imposter3d": "node scripts/restore-imposter-3d.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.118.0",
@@ -43,7 +44,9 @@
       "build/icon.png",
       "build/update-public-key.pem",
       "CHESS-LICENSE.txt",
-      "assets/imposter/*.png"
+      "assets/imposter/*.png",
+      "imposter-3d-legacy.js",
+      "IMPOSTER-3D-LICENSES.txt"
     ],
     "directories": {
       "output": "dist"
