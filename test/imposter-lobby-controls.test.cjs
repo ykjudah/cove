@@ -83,6 +83,7 @@ test('Imposter v2 lobbies persist across rounds, track votes, enforce cooldowns 
   await assert.rejects(db.query('select imp_delete_game($1)',[second]),/Admin access required/);
   await user(0);
   await db.query('select imp_delete_game($1)',[second]);
+  await db.exec('reset role');
   assert.equal((await db.query('select count(*)::int n from private.imp_games where id=$1',[second])).rows[0].n,0);
 
   await assert.rejects(act(1,g,'close'),/Only the host/i);
