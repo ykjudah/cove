@@ -7,7 +7,7 @@ export function bridgeImposterRpc(rpc) {
       ...params, lobby_name: params.lobby_name || 'My Imposter Lobby',
       meeting_cooldown_seconds: params.meeting_cooldown_seconds ?? 30
     });
-    if (name === 'imp_steps') return rpc('imp_steps_v2', params);
+    if (name === 'imp_steps') return rpc('imp_steps_3d', params);
     if (name === 'imp_action') {
       let {act,arg='',...rest} = params;
       if (act === 'kill') {act = 'kill_nearest'; arg='';}
@@ -18,7 +18,7 @@ export function bridgeImposterRpc(rpc) {
           name:options.name || 'My Imposter Lobby',
           meeting_cooldown:options.meeting_cooldown ?? 30});
       }
-      return rpc('imp_action_v2',{...rest,act,arg});
+      return rpc('imp_3d_action',{...rest,act,arg});
     }
     return rpc(name, params);
   };
