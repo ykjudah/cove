@@ -10,6 +10,25 @@ alter table private.imp_games
  add column if not exists round_ends_at timestamptz,
  add column if not exists round_number int not null default 0;
 
+-- Kick records last until the lobby is explicitly closed and cascade-deleted.
+create table if not exists private.imp_kicks(
+ game uuid not null references private.imp_games(id) on delete cascade,
+ uid uuid not null references public.profiles(id) on delete cascade,
+ kicked_by uuid not null references public.profiles(id),
+ kicked_at timestamptz not null default now(),
+ primary key(game,uid)
+);
+revoke all on private.imp_kicks from public,anon,authenticated;
+-- Override the shared join policy so old clients cannot bypass a host kick.
+create or replace function private.imp_can_join(g uuid) returns boolean
+language sql stable set search_path='' as $$
+ select auth.uid() is not null
+ and not exists(select 1 from private.imp_kicks k where k.game=g and k.uid=auth.uid())
+ and not exists(select 1 from private.imp_seats s where s.game=g and s.joined
+   and private.people_blocked(auth.uid(),s.uid))
+$$;
+revoke all on function private.imp_can_join(uuid) from public,anon,authenticated;
+
 create or replace function private.imp_check(g uuid) returns void
 language plpgsql set search_path='' as $$
 declare bad int;good int;remaining int;team text;
@@ -120,6 +139,20 @@ begin
   perform private.imp_back_to_lobby(game_id);
   select * into z from private.imp_games where id=game_id;
  end if;
+ if act='kick' then
+  if z.host<>auth.uid() then raise exception 'Only the host can kick players';end if;
+  begin t_id:=arg::uuid;
+  exception when invalid_text_representation then raise exception 'Invalid player';end;
+  if t_id=z.host then raise exception 'Host cannot kick themselves';end if;
+  if not exists(select 1 from private.imp_seats where game=game_id and uid=t_id) then
+   raise exception 'Player not in this game';
+  end if;
+  insert into private.imp_kicks(game,uid,kicked_by)
+   values(game_id,t_id,auth.uid()) on conflict(game,uid) do nothing;
+  delete from private.imp_seats where game=game_id and uid=t_id;
+  if z.phase in ('play','meeting') then perform private.imp_check(game_id);end if;
+  return public.imp_action_v2(game_id,'read','');
+ end if;
  if act='close' then
   if z.host<>auth.uid() then raise exception 'Only the host can close this lobby';end if;
   delete from private.imp_games where id=game_id;
@@ -151,7 +184,7 @@ begin
   if s.next_kill>clock_timestamp() then raise exception 'Kill cooldown active';end if;
   select t.uid into t_id from private.imp_seats t
   where t.game=game_id and t.uid<>s.uid and t.joined and t.alive
-   and t.role='Innocent' and t.room=s.room and t.arrive_at<=now()
+   and t.role='Innocent' and t.room=s.room and (t.arrive_at is null or t.arrive_at<=now())
    and private.imp_visible(z.map,s.x,s.y,t.x,t.y,13)
   order by (t.x-s.x)^2+(t.y-s.y)^2,t.uid limit 1;
   if t_id is null then raise exception 'No player within kill range';end if;
