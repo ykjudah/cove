@@ -7,7 +7,8 @@ alter table private.imp_seats
  add column if not exists vent_node int,
  add column if not exists vent_ready_at timestamptz,
  add column if not exists repair_order int[],
- add column if not exists repair_token uuid;
+ add column if not exists repair_token uuid,
+ add column if not exists move_epoch bigint not null default 0;
 
 -- Collision mask for the original 3D shuttle, not Keel's larger cafe.
 create or replace function private.imp_3d_lobby_clear(px real,py real)
@@ -140,7 +141,7 @@ begin
    dest_x:=(array[150,198,382,665])[destination+1];dest_y:=(array[112,311,275,179])[destination+1];
    dest_room:=(array[1,5,3,8])[destination+1];
    update private.imp_seats set vent_node=null,vent_ready_at=now()+make_interval(secs=>g.vent_cooldown),
-     x=dest_x,y=dest_y,room=dest_room,move_rev=move_rev+1,move_credit=12,walked_at=clock_timestamp()
+     x=dest_x,y=dest_y,room=dest_room,move_rev=move_rev+1,move_epoch=move_epoch+1,move_credit=12,walked_at=clock_timestamp()
     where game=game_id and uid=s.uid;
   end if;
   return public.imp_action_v2(game_id,'read','');
@@ -164,7 +165,7 @@ grant execute on function public.imp_3d_action(uuid,text,text) to authenticated;
 create or replace function public.imp_nearby(game_id uuid) returns jsonb
 language sql stable security definer set search_path='' as $$
  select coalesce(jsonb_agg(jsonb_build_object('uid',p.uid,'x',q.x,'y',q.y,'room',case when p.body then p.corpse_room else p.room end,
- 'body',p.body,'alive',p.alive,'suit',p.suit,'hat',p.hat,'rev',p.move_rev,'at',extract(epoch from p.walked_at)*1000)), '[]'::jsonb)
+ 'body',p.body,'alive',p.alive,'suit',p.suit,'hat',p.hat,'rev',p.move_rev,'epoch',p.move_epoch,'at',extract(epoch from p.walked_at)*1000)), '[]'::jsonb)
  from private.imp_games z join private.imp_seats me on me.game=z.id and me.uid=auth.uid() and me.joined
  join private.imp_seats p on p.game=z.id and p.joined cross join lateral(values(
  case when p.body then coalesce(p.bx,p.x) else p.x end,case when p.body then coalesce(p.by,p.y) else p.y end)) q(x,y)
