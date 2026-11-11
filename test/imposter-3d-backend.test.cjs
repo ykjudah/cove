@@ -94,8 +94,10 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
    catch(err){err.message='3D '+act+' action: '+err.message;throw err;}
   };
   await user(0);
+  console.log('[3D maps] before const game=(await db.query(');
   const game=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
    ['Caldera',1,5,2,20,'Three Dimensional Maps',30])).rows[0].id;
+  console.log('[3D maps] before let state=await run(0,game,'');
   let state=await run(0,game,'read');
   assert.equal(state.game.map,'Caldera');
   assert.ok(Math.abs(state.me.x-350)<52&&Math.abs(state.me.y-94)<50,
@@ -106,12 +108,14 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
   await run(2,game,'join');
   const settings={map:'Frostline',imposters:1,cooldown:5,tasks:2,vote_seconds:20,
     name:'Frostline Expedition',meeting_cooldown:30,vent_cooldown:20};
+  console.log('[3D maps] before state=await run(0,game,'conf');
   state=await run(0,game,'configure',JSON.stringify(settings));
   assert.equal(state.game.map,'Frostline');
   assert.equal(state.game.name,'Frostline Expedition');
   assert.equal(state.game.vent_cooldown,20);
   await assert.rejects(run(1,game,'configure',JSON.stringify(settings)),/host/i);
   await assert.rejects(run(0,game,'configure',JSON.stringify({...settings,map:'Unknown'})),/3D map/i);
+  console.log('[3D maps] before state=await run(0,game,'star');
   state=await run(0,game,'start');
   assert.equal(state.game.map,'Frostline');
   assert.equal(state.game.phase,'play');
@@ -121,6 +125,7 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
   await db.query('update private.imp_seats set x=148,y=148,room=2 where game=$1 and uid=$2',[game,good]);
   const id=(await db.query('select uid from private.imp_seats where game=$1 order by uid',[game])).rows.map(x=>x.uid);
   const idx=id.indexOf(good);
+  console.log('[3D maps] before state=await run(idx,game,'re');
   state=await run(idx,game,'repair_begin');
   assert.equal(state.me.repair_order.length,4);
   assert.equal(new Set(state.me.repair_order).size,4);
