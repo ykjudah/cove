@@ -5,9 +5,13 @@ See [START-HERE.md](START-HERE.md) for the current procedure and [supabase/READM
 ## Versions
 
 - Public display: `release-config.json` (`1.3`).
-- Internal updater/package version: `package.json` and `package-lock.json` (`2.3.0`). Keep internal versions increasing; do not reset them to match display branding.
-- Release tag: `v` plus the full internal version (`v2.3.0`).
+- Internal updater/package version: `package.json` and `package-lock.json` (`2.3.1`). Keep internal versions increasing; do not reset them to match display branding.
+- Release tag: `v` plus the full internal version (`v2.3.1`).
 - Installer: `Cove-${version}-Setup-${arch}.exe`, using the internal version.
+
+## Version bridge
+
+The historical `v1.7.0` Git tag already points to source declaring package version `2.3.0`. As a result, version labels, installer filenames, and binary updater versions may disagree. `v2.3.1` advances the internal version and exposes the runtime build number in Settings. Test **automatic update discovery from an existing v1.7.0 installation** before publishing; a green current-version build alone is not proof that older clients will upgrade. Never re-tag or overwrite `v2.3.0`.
 
 ## Build and release
 

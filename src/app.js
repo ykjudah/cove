@@ -987,7 +987,7 @@ $('about-save').onclick=saveAboutMe;
 $('settings-close').onclick = () => $('settings-dialog').close();
 function renderUpdateState(state) {
   desktopUpdate = state;
-  $('app-version').textContent = 'v' + state.version;
+  $('app-version').textContent = 'v' + state.version + (state.installedVersion ? ` (build ${state.installedVersion})` : '');
   $('update-status').textContent = state.status;
   if (document.activeElement !== $('update-source')) $('update-source').value = state.repository || '';
   $('update-check').disabled = state.busy || !state.repository;
