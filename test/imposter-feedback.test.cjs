@@ -4,7 +4,7 @@ test('public lobbies, unique cosmetics, sequenced corner movement, visibility an
  const {db,user,ids}=await create();
  try{
   await db.exec('reset role');
-  for(const file of ['upgrade-imposter.sql','upgrade-imposter-walk.sql','upgrade-keel-feedback.sql','upgrade-keel-feedback.sql'])await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
+  for(const file of ['upgrade-imposter.sql','upgrade-imposter-walk.sql','upgrade-keel-feedback.sql','upgrade-keel-feedback.sql','upgrade-imposter-smooth-movement.sql'])await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
   await user(0);const id=(await db.query("select imp_create('Keel',1,5,2,20) id")).rows[0].id;
   const act=async(i,a,arg='')=>{await user(i);return (await db.query('select imp_action($1,$2,$3) p',[id,a,arg])).rows[0].p;};
   await user(3);assert.equal((await db.query('select * from imp_list()')).rows[0].joined,false);
@@ -14,6 +14,21 @@ test('public lobbies, unique cosmetics, sequenced corner movement, visibility an
   await assert.rejects(act(0,'cosmetic',JSON.stringify({suit:lobby.players.find(p=>p.uid===ids[1]).suit,hat:'cap'})));
   const look=await act(0,'cosmetic',JSON.stringify({suit:8,hat:'sprout'}));assert.equal(look.me.hat,'sprout');assert.equal(look.players.find(p=>p.uid===ids[0]).suit,8);
   await act(0,'start');await assert.rejects(act(0,'cosmetic',JSON.stringify({suit:8,hat:'cap'})));
+  // When the movement allowance is exhausted, the whole batch is deferred.
+  // Clients must never drop unprocessed steps or advance the revision.
+  await db.exec('reset role');
+  await db.query("update private.imp_seats set move_credit=0,walked_at=clock_timestamp()+interval '1 second' where game=$1 and uid=$2",[id,ids[0]]);
+  await user(0);
+  const before=(await act(0,'read')).me;
+  const deferred=(await db.query('select imp_steps($1,$2,$3::jsonb) p',[id,before.move_rev,JSON.stringify([[.5,0],[.5,0]])])).rows[0].p;
+  assert.deepEqual(deferred,{x:before.x,y:before.y,revision:before.move_rev});
+  await db.exec('reset role');
+  await db.query('update private.imp_seats set move_credit=39,walked_at=clock_timestamp() where game=$1 and uid=$2',[id,ids[0]]);
+  await user(0);
+  const accepted=(await db.query('select imp_steps($1,$2,$3::jsonb) p',[id,before.move_rev,JSON.stringify([[.5,0],[.5,0]])])).rows[0].p;
+  assert.equal(accepted.revision,before.move_rev+1);
+  assert.ok(Math.abs(accepted.x-before.x-1)<.01);
+  assert.equal(accepted.y,before.y);
   // Turn at the elbow, where the endpoint chord cuts across the outside wall.
   await db.exec('reset role');await db.query("update private.imp_seats set x=125,y=138,room=-1,move_credit=39,walked_at=clock_timestamp() where game=$1 and uid=$2",[id,ids[0]]);
   await user(0);let me=(await act(0,'read')).me;
