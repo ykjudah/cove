@@ -84,7 +84,7 @@ export function mountImposter({rpc,user,label,friends}){
   try{
    if(gameId){const data=await rpc('imp_action_v2',{game_id:gameId,act:'read',arg:''});if(t===token&&!busy)apply(data);}
    else{const games=await rpc('imp_list_v2');if(t===token&&!busy&&!config){const key=JSON.stringify(games);if(key!==last){last=key;renderList(games);}}}
-  }catch(e){if(t===token){if(gameId&&/Match unavailable|Join the lobby first|Join this lobby first/i.test(e.message||''))home();else error(e);}}finally{if(t===token)reading=false;}
+  }catch(e){if(t===token){if(gameId&&/Match unavailable|Join the lobby first|Join this lobby first/i.test(e.message||'')){const wasClosed=/Match unavailable/i.test(e.message||'');home();status.textContent=wasClosed?'This lobby was closed.':'You were removed from the lobby.';}else error(e);}}finally{if(t===token)reading=false;}
  }
  async function perform(act,arg=''){
   if(busy)return;busy=true;const t=++token;reading=false;status.textContent='';
