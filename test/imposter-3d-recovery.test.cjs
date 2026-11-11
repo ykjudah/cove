@@ -53,7 +53,7 @@ test('3D client uses new server APIs and server-authoritative kills',async()=>{
   await adapter('imp_action',{game_id:'example',act:'cleanup',arg:''});
   await adapter('imp_action',{game_id:'example',act:'configure',arg:JSON.stringify({tasks:3,name:'Voyage',meeting_cooldown:60})});
   assert.equal(calls[0].name,'imp_list_v2');
-  assert.equal(calls[1].name,'imp_create_v2');
+  assert.equal(calls[1].name,'imp_create_3d');
   assert.equal(calls[1].args.meeting_cooldown_seconds,30);
   assert.equal(calls[2].name,'imp_steps_3d');
   assert.equal(calls[3].name,'imp_3d_action');
