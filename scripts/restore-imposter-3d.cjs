@@ -64,6 +64,29 @@ replace('      top.append(button("Controls", controls), button("\\u2190 Open Gam
 replace('        tablet.append(chat, voting);',
   '        if (Array.isArray(data.votes) && data.votes.length) {\n          const summary = el("details", null, "imp-vote-recap");\n          summary.append(el("summary", "Votes cast \\u00b7 " + data.votes.length));\n          for (const vote of data.votes) summary.append(el("p", label(vote.uid) + " voted " + (vote.choice === "skip" ? "to skip" : "for " + label(vote.choice))));\n          chat.append(summary);\n        }\n        tablet.append(chat, voting);',
   'voting recap');
+// Preserve newer named persistent lobbies and cooldown configuration.
+replace('option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15)\n      ];',
+  'option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15),\n        option("Meeting cooldown (seconds)", [10, 20, 30, 45, 60, 90, 120], current.meeting_cooldown ?? 30)\n      ];',
+  'meeting cooldown');
+replace('      form.append(...fields.map((f) => f[0]));',
+  '      const nameInput = el("input"); nameInput.value = current.name || "My Imposter Lobby"; nameInput.maxLength = 40;\n      const nameField = el("label", "Lobby name"); nameField.append(nameInput);\n      form.append(nameField, ...fields.map((f) => f[0]));',
+  'lobby name');
+replace('await perform("configure", JSON.stringify({ map: v[0], imposters: +v[1], cooldown: +v[2], tasks: +v[3], vote_seconds: +v[4], vent_cooldown: +v[5] }));',
+  'await perform("configure", JSON.stringify({ map: v[0], imposters: +v[1], cooldown: +v[2], tasks: +v[3], vote_seconds: +v[4], vent_cooldown: +v[5], meeting_cooldown: +v[6], name: nameInput.value.trim() }));',
+  'editing lobby');
+replace('const id = await rpc("imp_create", { map_name: v[0], imposters: +v[1], cooldown: +v[2], task_count: +v[3], vote_seconds: +v[4] });',
+  'const id = await rpc("imp_create", { map_name: v[0], imposters: +v[1], cooldown: +v[2], task_count: +v[3], vote_seconds: +v[4], lobby_name: nameInput.value.trim(), meeting_cooldown_seconds: +v[6] });',
+  'new named lobby');
+replace('if (+v[5] !== 15) await rpc("imp_action", { game_id: id, act: "configure", arg: JSON.stringify({ map: v[0], imposters: +v[1], cooldown: +v[2], tasks: +v[3], vote_seconds: +v[4], vent_cooldown: +v[5] }) });',
+  'if (+v[5] !== 15) await rpc("imp_action", { game_id: id, act: "configure", arg: JSON.stringify({ map: v[0], imposters: +v[1], cooldown: +v[2], tasks: +v[3], vote_seconds: +v[4], vent_cooldown: +v[5], meeting_cooldown: +v[6], name: nameInput.value.trim() }) });',
+  'creation vent settings');
+replace('body.append(el("h3", "Lobby"), el("p", game.imposters',
+  'body.append(el("h3", "Lobby · " + (game.name || game.map)), el("p", game.imposters',
+  'lobby heading');
+replace('      const stage2 = makeStage(data);',
+  '      if (me2.uid === game.host) {\n        const management = el("details", null, "imp-kick-list"); management.append(el("summary", "Manage crew"));\n        for (const p of players.filter(p => p.uid !== me2.uid && p.joined)) {\n          const row = el("div", null, "imp-row");\n          row.append(el("span", label(p.uid)), button("Kick", () => { if (window.confirm("Kick " + label(p.uid) + " from this lobby?")) perform("kick", p.uid); }));\n          management.append(row);\n        }\n        body.append(management);\n      }\n      const stage2 = makeStage(data);',
+  'host kicks');
+
 game += '\n  globalThis.CoveImposter3D = Object.freeze({mountImposter});\n})();\n';
 const root = path.resolve(__dirname, '..');
 fs.writeFileSync(path.join(root, 'imposter-3d-legacy.js'), game);
