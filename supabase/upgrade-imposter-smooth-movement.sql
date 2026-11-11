@@ -35,7 +35,7 @@ begin
    where p.game=game_id and p.uid=s.uid returning * into s;
  end if;
  return jsonb_build_object('x',s.x,'y',s.y,'revision',s.move_rev);
-end $;
+end $$;
 revoke all on function public.imp_steps_v2(uuid,bigint,jsonb) from public,anon;
 grant execute on function public.imp_steps_v2(uuid,bigint,jsonb) to authenticated;
 commit;
