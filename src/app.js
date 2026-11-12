@@ -464,7 +464,7 @@ const refreshRooms = createSerialRefresh(refreshRoomsOnce);
 function senderName(id) {
   return rooms.find(r => r.id === selected)?.room_members.find(m => m.user_id === id)?.profiles?.username || 'Former member';
 }
-function renderMessages(forceBottom = false) {
+function renderMessages(forceBottom = false, preserveScroll = false) {
   if (!me) return;
   if(forceBottom)reactionPicker=null;
   const history = $('history');
@@ -580,7 +580,7 @@ function renderMessages(forceBottom = false) {
   if (searchState?.focused) document.querySelector('.emoji-search')?.focus({ preventScroll: true });
   $('older').hidden = !hasOlder;
   renderReplyDraft();
-  if (reactionPicker) history.scrollTop = previousScroll;
+  if (preserveScroll || reactionPicker) history.scrollTop = previousScroll;
   else if (forceBottom || nearBottom) { history.scrollTop = history.scrollHeight;settleChatScroll(); }
 }
 async function selectRoom(id) {
@@ -666,8 +666,11 @@ async function loadHistory(older = false, jumpToBottom = false) {
   loading = true; $('older').disabled = true;
   const stillHere = () => currentView === view && sessionEpoch === epoch && selected === id;
   try {
+    // On reconnect, the cache already holds older history. Reconcile the
+    // latest 20 rows and fetch genuinely missed messages with a cursor.
+    const recentLimit = !older && cachedNewest ? 20 : CHAT_PAGE_SIZE;
     let query = client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
-      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(CHAT_PAGE_SIZE);
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(recentLimit);
     if (older) query = query.or('created_at.lt.' + oldest.created_at + ',and(created_at.eq.' + oldest.created_at + ',id.lt.' + oldest.id + ')');
     const rows = checked(await query);
     if (!stillHere()) return;
@@ -697,9 +700,10 @@ async function loadHistory(older = false, jumpToBottom = false) {
     }
 
     oldest = olderMessage(oldest, rows.at(-1));
+    // A recent-message reconciliation does not tell us whether the older
+    // history already cached in memory has older pages on the server.
     if (older || !cachedNewest) hasOlder = rows.length === CHAT_PAGE_SIZE;
-    else if (rows.length < CHAT_PAGE_SIZE) hasOlder = false;
-    renderMessages(!older && jumpToBottom);
+    renderMessages(!older && jumpToBottom, older);
     refreshReadReceipts();
     if (older) history.scrollTop = scroll + history.scrollHeight - height;
   } finally {
