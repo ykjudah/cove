@@ -22,7 +22,7 @@ test('Windows releases include original recoverable 3D game, styles and licenses
   const bundle=fs.readFileSync(path.join(root,'imposter-3d-legacy.js'),'utf8');
   const css=fs.readFileSync(path.join(root,'imposter-3d-legacy.css'),'utf8');
   assert.match(bundle,/function createScene3D\(/);
-  assert.match(bundle,/option\("Map", \["Keel", "Caldera", "Frostline"\]/);
+  assert.match(bundle,/option\("Map", current\.map && current\.map !== "Keel" \? \["Keel", current\.map\] : \["Keel"\]/);
   assert.match(bundle,/function wardrobePreview\(/);
   assert.match(bundle,/function crewModel\(/);
   assert.match(bundle,/function taskPuzzle\(/);
@@ -30,6 +30,13 @@ test('Windows releases include original recoverable 3D game, styles and licenses
   assert.match(bundle,/function step3D\(/);
   assert.match(bundle,/function motionTrack\(/);
   assert.match(bundle,/ack\.revision === packet\.revision/);
+  assert.match(bundle,/data-imposter-action=kill/);
+  assert.match(bundle,/dataset\.imposterAction = "kill"/);
+  assert.match(bundle,/Kill · /);
+  assert.doesNotMatch(bundle,/Eliminate " \+ label\(p\.uid\)/);
+  assert.match(bundle,/Latest vote results/);
+  assert.match(bundle,/data-imposter-action=meeting/);
+  assert.match(bundle,/data-imposter-action=sabotage/);
   assert.match(bundle,/Manage crew/);
   assert.match(bundle,/Lobby name/);
   assert.match(css,/\.imp-wire-board/);
