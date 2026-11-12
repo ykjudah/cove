@@ -23,6 +23,45 @@ test('messages are ordered by timestamp then ID without dropping ties',async()=>
  assert.equal(newestMessage([]),null);
 });
 
+test('cursor catch-up recovers 235 missed messages including timestamp ties',async()=>{
+ const {fetchMissedMessages,compareMessageCursor}=await helpers();
+ const original={id:'m000',room_id:'room',created_at:'2026-11-12T13:00:00Z'};
+ const newer=Array.from({length:235},(_,i)=>({
+   ...original,id:'m'+String(i+1).padStart(3,'0'),
+   created_at:i<120?'2026-11-12T13:00:00Z':'2026-11-12T13:00:01Z'
+ }));
+ const collected=new Map([[original.id,original]]);
+ let pages=0;
+ const fetched=await fetchMissedMessages(original,
+   async(cursor,limit)=>{
+     pages++;
+     return newer.filter(x=>compareMessageCursor(x,cursor)>0).slice(0,limit);
+   },
+   async rows=>{for(const row of rows)collected.set(row.id,row);},()=>true);
+ assert.equal(fetched,235);
+ assert.equal(collected.size,236);
+ assert.equal(pages,3);
+ assert.equal(collected.get('m235').created_at,'2026-11-12T13:00:01Z');
+ const after=newer.at(-1);
+ assert.equal(await fetchMissedMessages(after,async()=>[],async()=>{},()=>true),0);
+});
+
+test('cursor catch-up stops when the conversation is switched',async()=>{
+ const {fetchMissedMessages}=await helpers();
+ let active=true,count=0;
+ const result=await fetchMissedMessages({id:'a',created_at:'2026-11-12T13:00:00Z'},
+   async()=>{count++;active=false;return [{id:'b',created_at:'2026-11-12T13:00:01Z'}];},
+   async()=>{throw Error('stale conversations must not be mutated');},()=>active);
+ assert.equal(result,0);
+ assert.equal(count,1);
+});
+
+test('cursor catch-up rejects nonadvancing pages rather than looping forever',async()=>{
+ const {fetchMissedMessages}=await helpers();
+ const cursor={id:'b',created_at:'2026-11-12T13:00:00Z'};
+ await assert.rejects(fetchMissedMessages(cursor,async()=>[cursor],async()=>{},()=>true),/Non-advancing/);
+});
+
 test('reconnecting does not discard older message pagination',async()=>{
  const {hasOlderMessages,needsGameCardReconcile}=await helpers();
  const cached={id:'m20',created_at:'2026-11-11T12:00:00Z'};
@@ -101,6 +140,7 @@ test('Cove UI pages 50 messages, catches up after reconnect and preserves 3D mul
  assert.match(app,/hasOlderMessages\(older, cachedNewest, rows\.length, hasOlder\)/);
  assert.match(app,/needsGameCardReconcile\(hasActive,wasActive,lastCheck,Date\.now\(\)\)/);
  assert.match(app,/\.limit\(CHAT_CATCHUP_SIZE\)/);
+ assert.match(app,/fetchMissedMessages\(cachedNewest/);
  assert.match(app,/loadHistory\(true\)/);
  assert.match(app,/newestMessage\(messages\.values\(\)\)/);
  assert.match(app,/queueChatReconcile\(\)/);
