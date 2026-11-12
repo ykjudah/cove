@@ -1,5 +1,5 @@
 import {mountImposter} from './imposter.js';
-import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh } from './chat-window.mjs';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -702,7 +702,7 @@ async function loadHistory(older = false, jumpToBottom = false) {
     oldest = olderMessage(oldest, rows.at(-1));
     // A recent-message reconciliation does not tell us whether the older
     // history already cached in memory has older pages on the server.
-    if (older || !cachedNewest) hasOlder = rows.length === CHAT_PAGE_SIZE;
+    hasOlder = hasOlderMessages(older, cachedNewest, rows.length, hasOlder);
     renderMessages(!older && jumpToBottom, older);
     refreshReadReceipts();
     if (older) history.scrollTop = scroll + history.scrollHeight - height;
@@ -1348,7 +1348,7 @@ async function refreshActiveGames(){
    const lastCheck=gameCardReconciledAt.get(id)||0;
    // Active games stay responsive. Inactive game cards reconcile less often,
    // but a transition from playing to finished always checks immediately.
-   if(hasActive||wasActive||Date.now()-lastCheck>=45000){
+   if(needsGameCardReconcile(hasActive,wasActive,lastCheck,Date.now())){
      await refreshFinishedGameCards(id,session);
      if(token!==dockToken||session!==epoch||selected!==id)return;
      gameCardReconciledAt.set(id,Date.now());
