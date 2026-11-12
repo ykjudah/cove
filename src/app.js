@@ -119,6 +119,11 @@ function avatarNode(id, hidden = false, clickable = false) {
 }
 function relationship(id) { return friendships.find(r => r.sender_id === id || r.recipient_id === id); }
 function refreshPeopleViews() {
+  // Room member labels should reference the latest cached profile objects.
+  for (const room of rooms) for (const member of room.room_members) {
+    const current = people.get(member.user_id);
+    if (current) member.profiles = current;
+  }
   renderHeader(); renderRooms(); renderMessages(); renderSocial(); renderPerson(); renderOwnProfile();
 }
 async function refreshSocialOnce() {
@@ -434,17 +439,24 @@ function renderRooms() {
 async function refreshRoomsOnce() {
   const sessionEpoch = epoch, version = ++refreshVersion;
   const [raw,hiddenResult] = await Promise.all([
-    client.from('rooms').select('id,name,kind,avatar_data,created_at,last_activity_at,room_members(user_id,profiles(id,username,avatar_data,about_me,display_name))').order('created_at', { ascending: false }),
+    client.from('rooms').select('id,name,kind,avatar_data,created_at,last_activity_at,room_members(user_id)').order('created_at', { ascending: false }),
     client.from('hidden_rooms').select('room_id')
   ]);
   const data=checked(raw),hidden=new Set(checked(hiddenResult).map(row=>row.room_id));
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
-  rooms = data.filter(room=>!hidden.has(room.id));lastRoomSafetyRefresh=Date.now();
+  const visible = data.filter(room => !hidden.has(room.id));
+  // Reuse profile avatars instead of transmitting them with every room refresh.
+  const unseen = [...new Set(visible.flatMap(room=>room.room_members.map(member=>member.user_id)))]
+    .filter(id=>!people.has(id));
+  const fresh = unseen.length ? checked(await client.from('profiles')
+    .select('id,username,avatar_data,about_me,display_name').in('id',unseen)) : [];
+  if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
+  for (const p of fresh) {people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());}
+  rooms = visible.map(room=>({...room,room_members:room.room_members.map(member=>({
+    ...member,profiles:people.get(member.user_id)||null
+  }))}));
+  lastRoomSafetyRefresh=Date.now();
   if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
-  for(const room of rooms)for(const member of room.room_members)if(member.profiles) {
-    people.set(member.user_id,{...member.profiles,id:member.user_id});
-    profileRefreshAt.set(member.user_id,Date.now());
-  }
   renderRooms(); renderHeader();
 }
 const refreshRooms = createSerialRefresh(refreshRoomsOnce);
