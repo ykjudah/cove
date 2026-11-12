@@ -21,6 +21,15 @@ export function olderMessage(a, b) {
   return compareMessageCursor(a, b) <= 0 ? a : b;
 }
 
+export function hasOlderMessages(older, cachedNewest, rowsFetched, priorHasOlder, pageSize = CHAT_PAGE_SIZE) {
+  // A recent-message check must not erase the cursor for older cached pages.
+  return older || !cachedNewest ? rowsFetched === pageSize : priorHasOlder;
+}
+
+export function needsGameCardReconcile(hasActive, wasActive, lastCheck, now, idleInterval = 45000) {
+  return hasActive || wasActive || !lastCheck || now - lastCheck >= idleInterval;
+}
+
 export function createConversationCache(capacity = 5) {
   const cache = new Map();
   return {
