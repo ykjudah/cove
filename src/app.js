@@ -621,25 +621,52 @@ async function saveGroupSettings() {
   } catch(e) { notify(e.message); }
   finally { $('room-settings-save').disabled=false; }
 }
-async function loadHistory(older = false) {
-  if (!selected || loading) return;
+async function loadHistory(older = false, jumpToBottom = false) {
+  if (!selected || loading || (older && (!hasOlder || !oldest))) return;
   const currentView = view, sessionEpoch = epoch, id = selected;
+  const cachedNewest = older ? null : newestMessage(messages.values());
   loading = true; $('older').disabled = true;
+  const stillHere = () => currentView === view && sessionEpoch === epoch && selected === id;
   try {
     let query = client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
-      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
-    if (older && oldest) query = query.or(`created_at.lt.${oldest.created_at},and(created_at.eq.${oldest.created_at},id.lt.${oldest.id})`);
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(CHAT_PAGE_SIZE);
+    if (older) query = query.or('created_at.lt.' + oldest.created_at + ',and(created_at.eq.' + oldest.created_at + ',id.lt.' + oldest.id + ')');
     const rows = checked(await query);
-    if (currentView !== view || sessionEpoch !== epoch) return;
-    const height = $('history').scrollHeight, scroll = $('history').scrollTop;
+    if (!stillHere()) return;
+    const history = $('history'), height = history.scrollHeight, scroll = history.scrollTop;
     for (const m of rows) mergeMessage(m);
     await loadRelated(rows, currentView, sessionEpoch);
-    if (currentView !== view || sessionEpoch !== epoch) return;
-    oldest = rows.at(-1) || oldest;
-    hasOlder = rows.length === 100;
-    renderMessages(!older);refreshReadReceipts();
-    if (older) $('history').scrollTop = scroll + $('history').scrollHeight - height;
-  } finally { if (currentView === view && sessionEpoch === epoch) { loading = false; $('older').disabled = false; } }
+    if (!stillHere()) return;
+
+    // A long offline interval can contain more than the latest 50 messages.
+    // Catch up using indexed ascending cursors so none are silently skipped.
+    if (!older && cachedNewest && rows.length &&
+        compareMessageCursor(rows.at(-1), cachedNewest) > 0) {
+      let after = cachedNewest, batch;
+      do {
+        const next = checked(await client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
+          .or('created_at.gt.' + after.created_at + ',and(created_at.eq.' + after.created_at + ',id.gt.' + after.id + ')')
+          .order('created_at', {ascending:true}).order('id', {ascending:true})
+          .limit(CHAT_CATCHUP_SIZE));
+        if (!stillHere()) return;
+        const missing = next.filter(m => !messages.has(m.id));
+        for (const m of next) mergeMessage(m);
+        await loadRelated(missing, currentView, sessionEpoch);
+        if (!stillHere()) return;
+        batch = next.length;
+        if (batch) after = next.at(-1);
+      } while (batch === CHAT_CATCHUP_SIZE);
+    }
+
+    oldest = olderMessage(oldest, rows.at(-1));
+    if (older || !cachedNewest) hasOlder = rows.length === CHAT_PAGE_SIZE;
+    else if (rows.length < CHAT_PAGE_SIZE) hasOlder = false;
+    renderMessages(!older && jumpToBottom);
+    refreshReadReceipts();
+    if (older) history.scrollTop = scroll + history.scrollHeight - height;
+  } finally {
+    if (stillHere()) { loading = false; $('older').disabled = false; }
+  }
 }
 function connection(text) { $('connection').textContent = text === 'Live updates connected' ? 'Connected' : text; $('connection').title = text; }
 function renderTypingIndicator() {
