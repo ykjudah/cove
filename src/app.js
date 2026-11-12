@@ -1,5 +1,5 @@
 import {mountImposter} from './imposter.js';
-import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages } from './chat-window.mjs';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages, imposterDiscoveryInterval } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -1346,8 +1346,8 @@ async function presenceTick(){
  }
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
-function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
-function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
+function startSocialLive(){stopSocialLive();impInviteCount();refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
+function stopSocialLive(){clearTimeout(impInviteTimer);impInviteGeneration++;impInviteBusy=false;$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
  try{
@@ -1628,18 +1628,27 @@ const imposter=typeof recoveredGame==='function'
 const imposterOpenedRounds=new Map();
 $('open-games').onclick=()=>imposter.open();
 
-let impInviteTimer;
+let impInviteTimer,impInviteBusy=false,impInviteGeneration=0;
 async function impInviteCount(){
- const session=epoch;if(!me)return;
+ const session=epoch,generation=impInviteGeneration;
+ if(!me||impInviteBusy)return;
+ impInviteBusy=true;
+ let interval=2500;
  try{
   const rows=checked(await client.rpc('imp_list_v2'));
-  if(epoch!==session)return;
+  if(epoch!==session||generation!==impInviteGeneration)return;
+  interval=imposterDiscoveryInterval(rows);
   const n=rows.filter(r=>!r.joined&&r.phase==='lobby').length;
   $('imp-invites').textContent=n?n+' open':'';
-  // When a host begins a new round, open the game for every joined player.
-  // A closed window stays closed for the rest of that round; do not nag users.
+  // Joined accounts retain the original 2.5-second game-start checks.
+  // A closed window stays closed for the rest of that round.
   const active=rows.find(r=>r.joined&&r.round_number>0&&
    ['play','meeting','finished'].includes(r.phase)&&imposterOpenedRounds.get(r.id)!==r.round_number);
   if(active){imposterOpenedRounds.set(active.id,active.round_number);imposter.open(active.id);}
- }catch{}
+ }catch{}finally{
+  if(generation===impInviteGeneration){
+   impInviteBusy=false;
+   if(epoch===session&&me)impInviteTimer=setTimeout(impInviteCount,interval);
+  }
+ }
 }
