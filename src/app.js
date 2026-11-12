@@ -60,7 +60,7 @@ function saveConversationWindow() {
     parents: new Map([...parents].filter(([id]) => keptIds.has(id) || referenced.has(id))),
     reactions: new Map([...reactions].filter(([,reaction]) => keptIds.has(reaction.message_id))),
     oldest: trimmed ? recent[0] : oldest,
-    hasOlder: hasOlder || trimmed
+    hasOlder: hasOlder || trimmed, savedAt: Date.now()
   });
 }
 function loadCachedConversation(roomId) {
@@ -70,7 +70,7 @@ function loadCachedConversation(roomId) {
   for (const [id, value] of cached.parents) parents.set(id, value);
   for (const [id, value] of cached.reactions) reactions.set(id, value);
   oldest = cached.oldest; hasOlder = cached.hasOlder;
-  return true;
+  return cached;
 }
 function queueChatReconcile() {
   clearTimeout(chatReconnectTimer);
@@ -595,8 +595,12 @@ async function selectRoom(id) {
   renderHeader();
   $('welcome').hidden = true; $('history').hidden = false; $('composer').hidden = false;
   $('message').value = drafts.get(id) || '';
-  renderRooms(); renderMessages(cached);
-  await loadHistory(false, true);
+  renderRooms(); renderMessages(!!cached);
+  const unresolved = [...messages.values()].some(m=>m.reply_to && !parents.has(m.reply_to));
+  // Very recent cached conversations stay current through live message events,
+  // so reopening them need not download the same 50 messages again.
+  if (!cached || !inboxLive || unresolved || Date.now()-cached.savedAt>15000)
+    await loadHistory(false, true);
   if (selected === id) $('message').focus();
 }
 function openRoomSettings(room) {
@@ -810,7 +814,7 @@ async function enter(user) {
   me = user; const sessionEpoch = ++epoch;
   const ownProfile=await client.from('profiles').select('id,username,avatar_data,about_me,display_name').eq('id',me.id).single();
   if(ownProfile.error && ['42703','PGRST204'].includes(ownProfile.error.code))throw new Error('Database update needed: ask the owner to run the account/social SQL migration in Supabase SQL Editor.');
-  profile=checked(ownProfile);people.set(me.id,profile);
+  profile=checked(ownProfile);people.set(me.id,profile);profileRefreshAt.set(me.id,Date.now());
   if (sessionEpoch !== epoch) return;
   client.rpc('read_receipts_enabled').then(r=>{if(!r.error&&sessionEpoch===epoch)$('read-receipts').checked=r.data;});
   $('password').value = ''; $('my-name').textContent = privacy==='off'?profile.username:'You';
@@ -836,7 +840,10 @@ async function enter(user) {
         if (m.sender_id !== me.id && !blocks.has(m.sender_id) && inAppNotifications) Sounds.play('message');
       }
       if(event.eventType==='INSERT'&&m.sender_id!==me.id&&!blocks.has(m.sender_id))desktopPopup(m.room_id,false);
-      if (m?.room_id !== selected) conversationCache.updateMessage(m);
+      if (m?.room_id !== selected) {
+        if (event.eventType === 'INSERT') conversationCache.appendMessage(m);
+        else conversationCache.updateMessage(m);
+      }
       if (m?.room_id === selected) {
         if (event.eventType === 'INSERT' || messages.has(m.id)) mergeMessage(m);
         else if (!parents.get(m.id)?.deleted_at || m.deleted_at) parents.set(m.id, m);
