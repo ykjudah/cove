@@ -45,7 +45,7 @@ export function createConversationCache(capacity = 5) {
       if (entry.messages.size > 200) {
         const first = [...entry.messages.values()].sort(compareMessageCursor)[0];
         entry.messages.delete(first.id);
-        entry.parents.delete(first.id);
+        if (![...entry.messages.values()].some(m => m.reply_to === first.id)) entry.parents.delete(first.id);
         entry.oldest = [...entry.messages.values()].sort(compareMessageCursor)[0] || null;
         entry.hasOlder = true;
         for (const [key, reaction] of entry.reactions) {
