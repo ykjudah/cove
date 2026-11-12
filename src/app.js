@@ -1369,7 +1369,7 @@ async function presenceTick(){
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
 function startSocialLive(){stopSocialLive();impInviteCount();refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
-function stopSocialLive(){clearTimeout(impInviteTimer);impInviteGeneration++;impInviteBusy=false;$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
+function stopSocialLive(){clearTimeout(impInviteTimer);impInviteGeneration++;impInviteBusy=false;impInviteFastUntil=0;$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
  try{
@@ -1637,10 +1637,20 @@ for(const [id,key] of [['desktop-popups','cove-popups'],['tray-toggle','cove-tra
 if(desktop?.windows && $('tray-toggle').checked)desktop.setTray(true).catch(e=>notify(e.message));
 function desktopPopup(room,call){if(desktop?.windows && $('desktop-popups').checked)desktop.desktopNotice({room,call}).catch(()=>{});}
 desktop?.openNotice?.(room=>{if(me&&rooms.some(r=>r.id===room))selectRoom(room).catch(e=>notify(e.message));});
+let impInviteTimer,impInviteBusy=false,impInviteGeneration=0,impInviteFastUntil=0;
+const gameRpc = bridgeImposterRpc(async(name,args)=>checked(await client.rpc(name,args)));
 const recoveredGame=globalThis.CoveImposter3D?.mountImposter;
 const imposter=typeof recoveredGame==='function'
   ? recoveredGame({
-      rpc:bridgeImposterRpc(async(name,args)=>checked(await client.rpc(name,args))),
+      rpc:async(name,args)=>{
+        const result=await gameRpc(name,args);
+        if(name==='imp_create'||(name==='imp_action'&&args?.act==='join')){
+          impInviteFastUntil=Date.now()+30000;
+          clearTimeout(impInviteTimer);
+          impInviteTimer=setTimeout(impInviteCount,100);
+        }
+        return result;
+      },
       user:()=>me?.id,
       label:id=>personLabel(id),
       friends:()=>friendships.filter(r=>r.status==='accepted').map(r=>r.sender_id===me.id?r.recipient_id:r.sender_id).filter(id=>!blocks.has(id))
@@ -1650,7 +1660,6 @@ const imposter=typeof recoveredGame==='function'
 const imposterOpenedRounds=new Map();
 $('open-games').onclick=()=>imposter.open();
 
-let impInviteTimer,impInviteBusy=false,impInviteGeneration=0;
 async function impInviteCount(){
  const session=epoch,generation=impInviteGeneration;
  if(!me||impInviteBusy)return;
@@ -1659,7 +1668,7 @@ async function impInviteCount(){
  try{
   const rows=checked(await client.rpc('imp_list_v2'));
   if(epoch!==session||generation!==impInviteGeneration)return;
-  interval=imposterDiscoveryInterval(rows);
+  interval=imposterDiscoveryInterval(rows,impInviteFastUntil);
   const n=rows.filter(r=>!r.joined&&r.phase==='lobby').length;
   $('imp-invites').textContent=n?n+' open':'';
   // Joined accounts retain the original 2.5-second game-start checks.
