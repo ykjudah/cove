@@ -19,7 +19,7 @@ before making further trade-offs.
 | Joinable calls | 8 s while foregrounded; refreshed on returning to foreground | In PR #7 |
 | Presence heartbeat | 20 s while signed in (retains online status) | Deliberately unchanged |
 | Friends' presence statuses | Heartbeat cadence while foregrounded, skipped while minimized | In PR #7 |
-| Imposter game list | 2.5 s for joined players (prompt round auto-open); 8 s for users not joined to a game | In PR #7; preserves the original auto-open latency for joined players |
+| Imposter game list | 2.5 s for joined players and 30 s after joining/creating (immediate follow-up refresh); 8 s for users not joined to a game | In PR #7; preserves prompt round auto-open for joining players |
 | Live Imposter movement | During gameplay, revision-based state synchronization | **Unchanged:** never throttle without measured data and multiplayer testing |
 
 ## Required measurements before final release
