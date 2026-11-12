@@ -67,11 +67,7 @@ replace('      top.append(button("Controls", controls), button("\\u2190 Open Gam
 replace('        tablet.append(chat, voting);',
   '        if (Array.isArray(data.votes) && data.votes.length) {\n          const summary = el("details", null, "imp-vote-recap");\n          summary.append(el("summary", "Votes cast \\u00b7 " + data.votes.length));\n          for (const vote of data.votes) summary.append(el("p", label(vote.uid) + " voted " + (vote.choice === "skip" ? "to skip" : "for " + label(vote.choice))));\n          chat.append(summary);\n        }\n        tablet.append(chat, voting);',
   'voting recap');
-// The recovered 1.7.0 binary still includes all three original 3D worlds.
-// The later Keel-only feedback build hid Caldera and Frostline from the UI.
-replace('option("Map", current.map && current.map !== "Keel" ? ["Keel", current.map] : ["Keel"], current.map || "Keel"),',
-  'option("Map", ["Keel", "Caldera", "Frostline"], current.map || "Keel"),',
-  'restore three selectable 3D maps');
+// Preserve the original Keel-only map selector. New maps ship later.
 // Preserve newer named persistent lobbies and cooldown configuration.
 replace('option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15)\n      ];',
   'option("Vent cooldown (seconds)", [0, 5, 10, 15, 20, 30, 45, 60, 90], current.vent_cooldown ?? 15),\n        option("Meeting cooldown (seconds)", [10, 20, 30, 45, 60, 90, 120], current.meeting_cooldown ?? 30)\n      ];',
@@ -106,6 +102,73 @@ replace('        body.append(row);\n      }\n    }\n    function settings(editin
 replace('      body.replaceChildren(top);\n      if (game.phase === "lobby") {',
   '      body.replaceChildren(top);\n      if (me2.uid === game.host && game.phase !== "lobby") {\n        const manage=el("details",null,"imp-kick-list"); manage.append(el("summary","Manage players"));\n        for (const p of players.filter(p=>p.joined && p.uid!==me2.uid)) {\n          const row=el("div",null,"imp-row"); row.append(el("span",label(p.uid)),button("Kick",()=>{\n            if(window.confirm("Kick "+label(p.uid)+" from this match?")) perform("kick",p.uid);\n          })); manage.append(row);\n        }\n        body.append(manage);\n      }\n      if (game.phase === "lobby") {',
   'host kicks in active rounds');
+
+// Replace per-player kill buttons with one persistent server-authoritative
+// nearest-target action. Keep cooldown labels and availability fresh on each
+// poll even when the rest of the 3D scene has not changed.
+replace('    function apply(data) {',
+  `    function refreshActionButtons() {
+      if (!snapshot || snapshot.game.phase !== "play") return;
+      const { game, me: me2, players } = snapshot, p = scene?.position() || me2;
+      const now = Date.now();
+      const timeLeft = (when) => Math.max(0, Math.ceil(((Date.parse(when) || 0) - now) / 1000));
+      const kill = body.querySelector("[data-imposter-action=kill]");
+      if (kill) {
+        const remaining = timeLeft(me2.next_kill);
+        const eligible = players.some(q => q.uid !== me2.uid && q.alive && q.role !== "Imposter" &&
+          q.room === me2.room && Number.isFinite(q.x) && Number.isFinite(q.y) &&
+          Math.hypot(p.x - q.x, p.y - q.y) <= 13);
+        kill.textContent = remaining ? "Kill · " + remaining + "s" : eligible ? "Kill" : "Kill · Out of range";
+        kill.disabled = !me2.alive || me2.vent_node != null || remaining > 0 || !eligible;
+      }
+      const report = body.querySelector("[data-imposter-action=report]");
+      if (report) report.disabled = !me2.alive || !players.some(q => q.body &&
+        Number.isFinite(q.x) && Number.isFinite(q.y) && Math.hypot(p.x - q.x, p.y - q.y) <= 15);
+      const meeting = body.querySelector("[data-imposter-action=meeting]");
+      if (meeting) {
+        const remaining = timeLeft(game.meeting_ready_at);
+        const near = me2.room === 0 && propsFor(game.map).some(q => q.kind === "meeting" &&
+          Math.hypot(p.x - q.x, p.y - q.y) <= 13);
+        meeting.textContent = remaining ? "Emergency meeting · " + remaining + "s" : "Emergency meeting";
+        meeting.disabled = !me2.alive || me2.meeting_used || me2.vent_node != null || remaining > 0 || !near;
+      }
+      const sabotage = body.querySelector("[data-imposter-action=sabotage]");
+      if (sabotage) {
+        const remaining = timeLeft(game.sabotage_ready);
+        sabotage.textContent = game.lights_out ? "Power offline" : remaining ? "Cut power · " + remaining + "s" : "Cut power";
+        sabotage.disabled = !me2.alive || me2.vent_node != null || game.lights_out || remaining > 0;
+      }
+    }
+    function apply(data) {`,
+  'persistent action cooldown updater');
+replace('      scene?.update(data);\n      const nearStation =',
+  '      scene?.update(data);\n      refreshActionButtons();\n      const nearStation =',
+  'update action countdowns on each poll');
+replace('      renderMatch(data);\n      if (overlayKind === "wardrobe")',
+  '      renderMatch(data);\n      refreshActionButtons();\n      if (overlayKind === "wardrobe")',
+  'initialize persistent buttons after render');
+// The original scene has 3D models and movement; leave all of that intact.
+replace('      for (const p of players.filter((p2) => p2.uid !== me2.uid && p2.room === me2.room)) {\n        if (Math.hypot(p.x - me2.x, p.y - me2.y) > 13) continue;\n        if (me2.vent_node == null && me2.alive && me2.role === "Imposter" && p.alive && p.role !== "Imposter") actions.append(button("Eliminate " + label(p.uid), () => perform("kill", p.uid)));\n      }',
+  '      if (me2.role === "Imposter") { const kill = button("Kill", () => perform("kill")); kill.dataset.imposterAction = "kill"; actions.append(kill); }',
+  'single persistent nearest-target kill button');
+replace('      if (me2.alive && players.some((p) => p.body && Math.hypot(p.x - me2.x, p.y - me2.y) <= 15)) actions.append(button("Report body", () => perform("report")));',
+  '      { const report = button("Report body", () => perform("report")); report.dataset.imposterAction = "report"; actions.append(report); }',
+  'persistent report button');
+replace('      if (me2.vent_node == null && me2.alive && me2.room === 0 && !me2.meeting_used && propsFor(game.map).some((p) => p.kind === "meeting" && Math.hypot(me2.x - p.x, me2.y - p.y) <= 13)) actions.append(button("Emergency meeting", () => perform("meeting")));',
+  '      { const meeting = button("Emergency meeting", () => perform("meeting")); meeting.dataset.imposterAction = "meeting"; actions.append(meeting); }',
+  'persistent emergency meeting button');
+replace('      } else if (me2.alive && me2.role === "Imposter") actions.append(button("Cut power", () => perform("sabotage")));',
+  '      }\n      if (me2.role === "Imposter") { const sabotage = button("Cut power", () => perform("sabotage")); sabotage.dataset.imposterAction = "sabotage"; actions.append(sabotage); }',
+  'persistent sabotage button');
+replace('      } else body.append(el("small", "Kill ready " + new Date(me2.next_kill).toLocaleTimeString()));',
+  '      }',
+  'remove duplicate kill time label');
+replace('      if (game.phase === "lobby") {',
+  '      if (game.phase !== "lobby" && game.phase !== "meeting" && Array.isArray(game.last_votes) && game.last_votes.length) {\n        const recap = el("details", null, "imp-vote-recap"); recap.append(el("summary", "Latest vote results"));\n        for (const vote of game.last_votes) recap.append(el("p", label(vote.uid) + " voted " + (vote.choice === "skip" ? "to skip" : "for " + label(vote.choice))));\n        body.append(recap);\n      }\n      if (game.phase === "lobby") {',
+  'voting recap after meeting resolution');
+replace('      if (id) enter2(id, false); else home();',
+  '      if (id && gameId === id && dialog.open && snapshot) return;\n      if (id) enter2(id, false); else home();',
+  'do not reopen an already visible game');
 
 game += '\n  globalThis.CoveImposter3D = Object.freeze({mountImposter});\n})();\n';
 const root = path.resolve(__dirname, '..');
