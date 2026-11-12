@@ -450,13 +450,20 @@ async function refreshRoomsOnce() {
   const unseen = [...new Set(visible.flatMap(room=>room.room_members.map(member=>member.user_id)))]
     .filter(id=>!people.has(id));
   const unknownAvatars=groupAvatarsToRefresh(visible,roomAvatarCache);
+  const avatarFetchStartedAt=Date.now();
   const [fresh,avatars] = await Promise.all([
     unseen.length ? client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',unseen) : Promise.resolve({data:[],error:null}),
     unknownAvatars.length ? client.from('rooms').select('id,avatar_data').in('id',unknownAvatars) : Promise.resolve({data:[],error:null})
   ]);
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
-  for (const p of checked(fresh)) {people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());}
-  for (const row of checked(avatars)) roomAvatarCache.set(row.id,{value:row.avatar_data,at:Date.now()});
+  for (const p of checked(fresh)) {
+    if ((profileRefreshAt.get(p.id)||0)>avatarFetchStartedAt) continue;
+    people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());
+  }
+  for (const row of checked(avatars)) {
+    if ((roomAvatarCache.get(row.id)?.at||0)>avatarFetchStartedAt) continue;
+    roomAvatarCache.set(row.id,{value:row.avatar_data,at:Date.now()});
+  }
   rooms = visible.map(room=>({
     ...room,avatar_data:roomAvatarCache.get(room.id)?.value||null,
     room_members:room.room_members.map(member=>({
