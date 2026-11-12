@@ -1031,7 +1031,7 @@ document.addEventListener('visibilitychange', () => {
   refreshRooms().catch(e => notify(e.message));
   if (Date.now() - lastSocialSafetyRefresh > 120000) refreshSocial().catch(()=>{});
   if (selected) queueChatReconcile();
-  refreshJoinableCalls();refreshActiveGames();
+  refreshJoinableCalls();refreshActiveGames();presenceTick();
   refreshReadReceipts();
 });
 window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) queueChatReconcile(); } });
@@ -1333,8 +1333,17 @@ function paintPresenceElement(el){
 function paintPresence(){document.querySelectorAll('[data-presence-id]').forEach(paintPresenceElement);const label=$('person-presence');if(label){label.dataset.presenceId=personId||'';if(personId)paintPresenceElement(label);}}
 async function presenceTick(){
  if(!me||presenceBusy)return;presenceBusy=true;const session=epoch;
- try{checked(await client.rpc('touch_presence',{session_id:presenceSession,is_online:true}));const ids=[...new Set([me.id,...people.keys(),...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])].slice(0,200);
- const rows=checked(await client.rpc('presence_status',{player_ids:ids}));if(session!==epoch)return;for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});}
+ try{
+  checked(await client.rpc('touch_presence',{session_id:presenceSession,is_online:true}));
+  // Remain online while minimized, but do not download everyone else's
+  // presence until the user can actually see those indicators.
+  if(document.visibilityState==='visible'){
+   const ids=[...new Set([me.id,...people.keys(),...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])].slice(0,200);
+   const rows=checked(await client.rpc('presence_status',{player_ids:ids}));
+   if(session!==epoch)return;
+   for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});
+  }
+ }
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
 function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
