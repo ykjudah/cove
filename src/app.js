@@ -54,6 +54,7 @@ function saveConversationWindow() {
   const recent = [...messages.values()].sort(compareMessageCursor).slice(-200);
   const keptIds = new Set(recent.map(m => m.id));
   const referenced = new Set(recent.map(m => m.reply_to).filter(Boolean));
+  if (replyDrafts.get(selected)) referenced.add(replyDrafts.get(selected));
   const trimmed = recent.length < messages.size;
   conversationCache.set(selected, {
     messages: new Map(recent.map(m => [m.id, m])),
