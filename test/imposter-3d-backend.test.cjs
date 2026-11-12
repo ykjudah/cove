@@ -17,7 +17,7 @@ test('3D shuttle walking, expanded cosmetics, vents and wire repair coexist with
    return (await db.query('select public.imp_3d_action($1,$2,$3) p',[g,kind,arg])).rows[0].p;
   };
   await user(0);
-  const g=(await db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
+  const g=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
     ['Keel',1,5,2,20,'Original 3D Ship',30])).rows[0].id;
   await act(1,g,'join');await act(2,g,'join');await act(3,g,'join');
   const lobby=await act(0,g,'read');
@@ -79,74 +79,113 @@ test('3D shuttle walking, expanded cosmetics, vents and wire repair coexist with
 });
 
 
-test('supports all three recovered 3D maps and their correct Electrical rooms',async()=>{
+test('Keel-only ship, persistent rounds, vote recap and meeting cooldown',async()=>{
+ const {db,user,ids}=await create();
+ try{
+  await db.exec('reset role');
+  for(const file of ['upgrade-imposter.sql','upgrade-imposter-walk.sql',
+   'upgrade-keel-feedback.sql','upgrade-imposter-smooth-movement.sql',
+   'upgrade-imposter-lobby-controls.sql','upgrade-imposter-ship-lobby.sql',
+   'upgrade-imposter-3d-compat.sql'])
+   await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
+  await user(1);
+  await assert.rejects(db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) g',
+   ['Caldera',1,5,2,20,'No extra maps',30]),/Keel is the only available map/);
+  const g=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) g',
+   ['Keel',1,5,2,20,'Walkable Ship',30])).rows[0].g;
+  const run=async(i,act,arg='')=>{
+   await user(i);
+   return (await db.query('select public.imp_3d_action($1,$2,$3) x',[g,act,arg])).rows[0].x;
+  };
+  await run(0,'join');await run(2,'join');
+  let state=await run(1,'read');
+  assert.equal(state.game.map,'Keel');
+  assert.equal(state.game.phase,'lobby');
+  assert.equal(state.game.name,'Walkable Ship');
+  assert.ok(Math.abs(state.me.x-350)<52,'host begins inside authentic 3D shuttle');
+  const settings={map:'Keel',imposters:1,tasks:2,cooldown:5,vote_seconds:20,
+   meeting_cooldown:30,vent_cooldown:10,name:'Renamed Ship'};
+  await assert.rejects(run(1,'configure',JSON.stringify({...settings,map:'Frostline'})),/Keel/);
+  state=await run(1,'configure',JSON.stringify(settings));
+  assert.equal(state.game.name,'Renamed Ship');
+  assert.equal(state.game.meeting_cooldown,30);
+  await assert.rejects(run(2,'configure',JSON.stringify(settings)),/Only the host/);
+  const first=await run(1,'start');
+  assert.equal(first.game.phase,'play');
+  assert.equal(first.game.round_number,1);
+  await assert.rejects(run(1,'meeting'),/cooldown/i);
+  await db.exec('reset role');
+  await db.query("update private.imp_games set meeting_ready_at=clock_timestamp()-interval '1 second' where id=$1",[g]);
+  const meeting=await run(1,'meeting');
+  assert.equal(meeting.game.phase,'meeting');
+  const vote1=await run(1,'vote','skip');
+  assert.ok(vote1.votes.some(v=>v.uid===ids[1]&&v.choice==='skip'));
+  await run(0,'vote','skip');
+  const votes=await run(2,'vote','skip');
+  assert.equal(votes.game.phase,'play');
+  assert.equal(votes.game.last_votes.length,3);
+  assert.deepEqual(new Set(votes.game.last_votes.map(v=>v.uid)),new Set([ids[0],ids[1],ids[2]]));
+  assert.ok(votes.game.last_votes.every(v=>v.choice==='skip'));
+  await db.exec('reset role');
+  await db.query("update private.imp_games set phase='finished',winner='Innocent',round_ends_at=clock_timestamp()-interval '1 second' where id=$1",[g]);
+  state=await run(1,'read');
+  assert.equal(state.game.phase,'lobby');
+  assert.equal(state.game.name,'Renamed Ship');
+  assert.equal(state.game.round_number,1);
+  const next=await run(1,'start');
+  assert.equal(next.game.round_number,2,'host can start another round without recreating lobby');
+  await run(1,'close');
+  await db.exec('reset role');
+  assert.equal((await db.query('select count(*)::int n from private.imp_games where id=$1',[g])).rows[0].n,0);
+ }finally{await db.close();}
+});
+
+test('admin can delete someone else’s open lobby, regular users cannot',async()=>{
  const {db,user}=await create();
  try{
   await db.exec('reset role');
-  for(const file of [
-   'upgrade-imposter.sql','upgrade-imposter-walk.sql','upgrade-keel-feedback.sql',
-   'upgrade-imposter-smooth-movement.sql','upgrade-imposter-lobby-controls.sql',
-   'upgrade-imposter-ship-lobby.sql','upgrade-imposter-3d-compat.sql'
-  ])await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
-  const run=async(index,g,act,arg='')=>{
-   await user(index);
-   try{return (await db.query('select public.imp_3d_action($1,$2,$3) result',[g,act,arg])).rows[0].result;}
-   catch(err){err.message='3D '+act+' action: '+err.message;throw err;}
-  };
+  for(const file of ['upgrade-imposter.sql','upgrade-imposter-walk.sql',
+   'upgrade-keel-feedback.sql','upgrade-imposter-smooth-movement.sql',
+   'upgrade-imposter-lobby-controls.sql','upgrade-imposter-ship-lobby.sql',
+   'upgrade-imposter-3d-compat.sql'])
+   await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
+  await user(1);
+  const g=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) g',
+   ['Keel',1,5,2,20,'Other Host Game',30])).rows[0].g;
+  await user(2);
+  await assert.rejects(db.query('select public.imp_delete_game($1)',[g]),/Admin access required/);
   await user(0);
-  // The original v2 RPC is intentionally Keel-only. 3D creation must not
-  // remove that restriction for installed older clients.
-  await assert.rejects(db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
-   ['Caldera',1,5,2,20,'Legacy client',30]),/Invalid match settings/);
-  const game=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) id',
-   ['Caldera',1,5,2,20,'Three Dimensional Maps',30])).rows[0].id;
-  let state=await run(0,game,'read');
-  assert.equal(state.game.map,'Caldera');
-  assert.ok(Math.abs(state.me.x-350)<52&&Math.abs(state.me.y-94)<50,
-   'Caldera game creators must spawn inside the 3D shuttle, not in Caldera');
-  const guest=await run(1,game,'join');
-  assert.ok(Math.abs(guest.me.x-350)<52&&Math.abs(guest.me.y-94)<50,
-   'Caldera joiners must enter the shuttle before the match');
-  await run(2,game,'join');
-  const settings={map:'Frostline',imposters:1,cooldown:5,tasks:2,vote_seconds:20,
-    name:'Frostline Expedition',meeting_cooldown:30,vent_cooldown:20};
-  state=await run(0,game,'configure',JSON.stringify(settings));
-  assert.equal(state.game.map,'Frostline');
-  assert.equal(state.game.name,'Frostline Expedition');
-  assert.equal(state.game.vent_cooldown,20);
-  await assert.rejects(run(1,game,'configure',JSON.stringify(settings)),/host/i);
-  await assert.rejects(run(0,game,'configure',JSON.stringify({...settings,map:'Unknown'})),/3D map/i);
-  state=await run(0,game,'start');
-  assert.equal(state.game.map,'Frostline');
-  assert.equal(state.game.phase,'play');
+  const listed=(await db.query('select * from public.imp_list_v2() where id=$1',[g])).rows;
+  assert.equal(listed.length,1);
+  assert.equal(listed[0].is_admin,true);
+  await db.query('select public.imp_delete_game($1)',[g]);
   await db.exec('reset role');
-  await db.query('update private.imp_games set lights_out=true where id=$1',[game]);
-  const good=(await db.query('select uid from private.imp_seats where game=$1 and role=\'Innocent\' limit 1',[game])).rows[0].uid;
-  await db.query('update private.imp_seats set x=148,y=148,room=2 where game=$1 and uid=$2',[game,good]);
-  const id=(await db.query('select uid from private.imp_seats where game=$1 order by uid',[game])).rows.map(x=>x.uid);
-  const idx=id.indexOf(good);
-  state=await run(idx,game,'repair_begin');
-  assert.equal(state.me.repair_order.length,4);
-  assert.equal(new Set(state.me.repair_order).size,4);
-  const connections=[0,1,2,3].map(i=>state.me.repair_order.indexOf(i));
-  await assert.rejects(run(idx,game,'repair',JSON.stringify({
-   token:state.me.repair_token,connections:[99,99,99,99]
-  })),/Connect matching wires first|Invalid repair/);
-  state=await run(idx,game,'repair',JSON.stringify({token:state.me.repair_token,connections}));
-  assert.equal(state.game.lights_out,false);
+  assert.equal((await db.query('select count(*)::int n from private.imp_games where id=$1',[g])).rows[0].n,0);
+ }finally{await db.close();}
+});
+
+test('one server-authoritative kill picks closest available victim',async()=>{
+ const {db,user,ids}=await create();
+ try{
   await db.exec('reset role');
-  await db.query("update private.imp_games set phase='finished',winner='Innocent',round_ends_at=clock_timestamp()-interval '1 second' where id=$1",[game]);
-  state=await run(0,game,'read');
-  assert.equal(state.game.phase,'lobby');
-  state=await run(0,game,'configure',JSON.stringify({...settings,map:'Caldera'}));
-  assert.equal(state.game.map,'Caldera');
-  const second=await run(0,game,'start');
-  assert.equal(second.game.round_number,2);
+  for(const file of ['upgrade-imposter.sql','upgrade-imposter-walk.sql',
+   'upgrade-keel-feedback.sql','upgrade-imposter-smooth-movement.sql',
+   'upgrade-imposter-lobby-controls.sql','upgrade-imposter-ship-lobby.sql',
+   'upgrade-imposter-3d-compat.sql'])
+   await db.exec(fs.readFileSync(require.resolve('../supabase/'+file),'utf8'));
+  await user(1);
+  const g=(await db.query('select public.imp_create_3d($1,$2,$3,$4,$5,$6,$7) g',
+   ['Keel',1,5,2,20,'Kill Test',30])).rows[0].g;
+  const run=async(i,act,arg='')=>{
+   await user(i);
+   return (await db.query('select public.imp_3d_action($1,$2,$3) x',[g,act,arg])).rows[0].x;
+  };
+  await run(0,'join');await run(2,'join');await run(1,'start');
   await db.exec('reset role');
-  await db.query("update private.imp_games set phase='finished',winner='Innocent',round_ends_at=clock_timestamp()-interval '1 second' where id=$1",[game]);
-  state=await run(0,game,'read');
-  assert.equal(state.game.phase,'lobby');
-  assert.ok(Math.abs(state.me.x-350)<52&&Math.abs(state.me.y-94)<50,
-   'Caldera round survivors must return to the 3D shuttle, not map room 0');
+  await db.query("update private.imp_seats set role=case when uid=$2 then 'Imposter' else 'Innocent' end,x=case when uid=$2 then 350 when uid=$3 then 352 else 357 end,y=94,room=0,alive=true,body=false,next_kill=clock_timestamp()-interval '1 second' where game=$1",[g,ids[1],ids[0]]);
+  const hit=await run(1,'kill_nearest');
+  assert.equal(hit.players.find(p=>p.uid===ids[0]).alive,false,'closest player was killed');
+  assert.equal(hit.players.find(p=>p.uid===ids[2]).alive,true,'farther player survived');
+  await assert.rejects(run(1,'kill_nearest'),/cooldown|Kill unavailable/i);
  }finally{await db.close();}
 });
