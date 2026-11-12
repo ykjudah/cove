@@ -135,7 +135,7 @@ jobs:
           test -s dist/Cove-2.8.2-Setup-x64.exe
           test -s dist/Cove-2.8.2-Setup-x64.exe.blockmap
           test -s dist/latest.yml
-          grep -Eq '^version: ["'\''"]?2[.]8[.]2["'\''"]?$' dist/latest.yml || {
+          grep -Eq '^version: [^[:alnum:]]?2[.]8[.]2[^[:alnum:]]?$' dist/latest.yml || {
             echo "Wrong updater version; cannot publish"; exit 1;
           }
           grep -Eq '^pocketchatSignature: .+' dist/latest.yml || {
