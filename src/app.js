@@ -46,6 +46,7 @@ let signup = false, channel, poll, epoch = 0, view = 0, loading = false, oldest 
 let hasOlder = false, noticeTimer, refreshTimer, refreshVersion = 0;
 const conversationCache = createConversationCache(5);
 let chatOlderTimer = null, chatReconnectTimer = null, lastSocialSafetyRefresh = 0;
+let lastRoomSafetyRefresh = 0, inboxLive = false;
 function saveConversationWindow() {
   if (!selected || !messages.size) return;
   // Bound memory per inactive chat as well as the number of cached rooms.
@@ -438,7 +439,7 @@ async function refreshRoomsOnce() {
   ]);
   const data=checked(raw),hidden=new Set(checked(hiddenResult).map(row=>row.room_id));
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
-  rooms = data.filter(room=>!hidden.has(room.id));
+  rooms = data.filter(room=>!hidden.has(room.id));lastRoomSafetyRefresh=Date.now();
   if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
   for(const room of rooms)for(const member of room.room_members)if(member.profiles) {
     people.set(member.user_id,{...member.profiles,id:member.user_id});
@@ -847,7 +848,8 @@ async function enter(user) {
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{if(sessionEpoch===epoch && rooms.some(room=>room.id===event.new.id))refreshRooms().catch(e=>notify(e.message));})
     .subscribe(status => {
       if (sessionEpoch !== epoch) return;
-      connection(status === 'SUBSCRIBED' ? 'Live updates connected' : 'Reconnecting…');
+      inboxLive = status === 'SUBSCRIBED';
+      connection(inboxLive ? 'Live updates connected' : 'Reconnecting…');
       if (status === 'SUBSCRIBED') {
         refreshRooms().catch(e => notify(e.message));
         // Keep the current scroll position and fetch only recent/missed messages.
@@ -857,11 +859,14 @@ async function enter(user) {
   // Recovers room invitations even if an event was missed. Message catch-up happens on reconnect.
   poll = setInterval(() => {
     if (!me || document.visibilityState !== 'visible') return;
-    refreshRooms().catch(() => connection('Connection interrupted'));
-    // Social data is updated via Realtime; this is just a safety refresh.
-    if (Date.now() - lastSocialSafetyRefresh > 120000)
+    // Realtime keeps active sessions current. Poll faster only when disconnected.
+    const roomInterval = inboxLive ? 120000 : 30000;
+    const socialInterval = inboxLive ? 180000 : 60000;
+    if (Date.now() - lastRoomSafetyRefresh >= roomInterval)
+      refreshRooms().catch(() => connection('Connection interrupted'));
+    if (Date.now() - lastSocialSafetyRefresh >= socialInterval)
       refreshSocial().catch(() => connection('Connection interrupted'));
-  }, 60000);
+  }, 30000);
 }
 function leave() {
  callView?.dispose();callView=null;
@@ -871,6 +876,7 @@ function leave() {
   closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
   leaveTypingRoom(); clearInAppNotifications();
   clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);conversationCache.clear();
+  inboxLive=false;lastRoomSafetyRefresh=0;lastSocialSafetyRefresh=0;
   epoch++; view++; selected = null; me = null; rooms = []; messages.clear(); drafts.clear(); pending.clear(); unread.clear(); parents.clear(); reactions.clear(); replyDrafts.clear(); reactionBusy.clear();
   clearInterval(poll); clearTimeout(refreshTimer);
   if (channel) client.removeChannel(channel).catch(() => {});
