@@ -21,6 +21,27 @@ export function olderMessage(a, b) {
   return compareMessageCursor(a, b) <= 0 ? a : b;
 }
 
+// Cursor-based catch-up for long disconnections. Caller controls the database
+// query, so this can be tested without a live Supabase connection.
+export async function fetchMissedMessages(after, fetchPage, mergePage, isCurrent, pageSize = CHAT_CATCHUP_SIZE) {
+  let cursor = after, fetched = 0;
+  while (isCurrent()) {
+    const rows = await fetchPage(cursor, pageSize);
+    if (!isCurrent() || !rows.length) return fetched;
+    // Guard against backend cursor bugs accidentally producing an infinite loop.
+    for (let i = 0; i < rows.length; i++) {
+      if (compareMessageCursor(rows[i], i ? rows[i - 1] : cursor) <= 0)
+        throw Error('Non-advancing message history cursor');
+    }
+    await mergePage(rows);
+    if (!isCurrent()) return fetched;
+    fetched += rows.length;
+    cursor = rows.at(-1);
+    if (rows.length < pageSize) break;
+  }
+  return fetched;
+}
+
 export function hasOlderMessages(older, cachedNewest, rowsFetched, priorHasOlder, pageSize = CHAT_PAGE_SIZE) {
   // A recent-message check must not erase the cursor for older cached pages.
   return older || !cachedNewest ? rowsFetched === pageSize : priorHasOlder;
