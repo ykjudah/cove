@@ -57,3 +57,19 @@ export function createConversationCache(capacity = 5) {
     get size() { return cache.size; }
   };
 }
+
+export function createSerialRefresh(work) {
+  let active = null, repeat = false;
+  return () => {
+    if (active) { repeat = true; return active; }
+    const request = (async () => {
+      do {
+        repeat = false;
+        await work();
+      } while (repeat);
+    })();
+    const tracked = request.finally(() => { if (active === tracked) active = null; });
+    active = tracked;
+    return tracked;
+  };
+}
