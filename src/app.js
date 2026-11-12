@@ -1,5 +1,5 @@
 import {mountImposter} from './imposter.js';
-import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages, imposterDiscoveryInterval } from './chat-window.mjs';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages, imposterDiscoveryInterval, groupAvatarsToRefresh } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -449,9 +449,7 @@ async function refreshRoomsOnce() {
   // Reuse profile avatars instead of transmitting them with every room refresh.
   const unseen = [...new Set(visible.flatMap(room=>room.room_members.map(member=>member.user_id)))]
     .filter(id=>!people.has(id));
-  const now=Date.now(), unknownAvatars=visible
-    .filter(room=>room.kind==='group'&&(!roomAvatarCache.has(room.id)||now-(roomAvatarCache.get(room.id)?.at||0)>600000))
-    .map(room=>room.id);
+  const unknownAvatars=groupAvatarsToRefresh(visible,roomAvatarCache);
   const [fresh,avatars] = await Promise.all([
     unseen.length ? client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',unseen) : Promise.resolve({data:[],error:null}),
     unknownAvatars.length ? client.from('rooms').select('id,avatar_data').in('id',unknownAvatars) : Promise.resolve({data:[],error:null})
@@ -641,7 +639,7 @@ async function closeDirectMessage(id=roomSettingsId) {
   if(result.error&&result.error.code!=='23505')throw result.error;
   rooms=rooms.filter(item=>item.id!==room.id);unread.delete(room.id);
   $('room-settings-dialog').close();if(selected===room.id)showWelcome();else renderRooms();
-  conversationCache.delete(room.id);
+  conversationCache.delete(room.id);roomAvatarCache.delete(room.id);
   notify('Direct message hidden from your list. Shared history is still saved.');
 }
 async function leaveGroup() {
@@ -650,7 +648,7 @@ async function leaveGroup() {
   checked(await client.rpc('leave_group',{target_room:id}));
   rooms=rooms.filter(item=>item.id!==id);unread.delete(id);
   $('room-settings-dialog').close();if(selected===id)showWelcome();else renderRooms();
-  conversationCache.delete(id);
+  conversationCache.delete(id);roomAvatarCache.delete(id);
   notify('You left the group. The conversation and shared history remain for its members.');
 }
 async function saveGroupSettings() {
