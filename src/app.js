@@ -1,5 +1,5 @@
 import {mountImposter} from './imposter.js';
-import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache } from './chat-window.mjs';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -120,7 +120,7 @@ function relationship(id) { return friendships.find(r => r.sender_id === id || r
 function refreshPeopleViews() {
   renderHeader(); renderRooms(); renderMessages(); renderSocial(); renderPerson(); renderOwnProfile();
 }
-async function refreshSocial() {
+async function refreshSocialOnce() {
   if (!me) return;
   const currentEpoch = epoch, version = ++socialVersion;
   const [rels, banned] = await Promise.all([
@@ -136,6 +136,7 @@ async function refreshSocial() {
   profile = people.get(me.id) || profile;
   refreshPeopleViews();
 }
+const refreshSocial = createSerialRefresh(refreshSocialOnce);
 async function socialAction(action,id) {
   if (socialBusy || !me) return;
   const target = personData(id);
@@ -425,7 +426,7 @@ function renderRooms() {
   }
   if (!$('rooms').children.length) $('rooms').append(node('p', 'empty', query ? 'No matching conversations.' : 'Your conversations will appear here. Start one with the + button.'));
 }
-async function refreshRooms() {
+async function refreshRoomsOnce() {
   const sessionEpoch = epoch, version = ++refreshVersion;
   const [raw,hiddenResult] = await Promise.all([
     client.from('rooms').select('id,name,kind,avatar_data,created_at,last_activity_at,room_members(user_id,profiles(id,username,avatar_data,about_me,display_name))').order('created_at', { ascending: false }),
@@ -438,6 +439,7 @@ async function refreshRooms() {
   for(const room of rooms)for(const member of room.room_members)if(member.profiles)people.set(member.user_id,{...member.profiles,id:member.user_id});
   renderRooms(); renderHeader();
 }
+const refreshRooms = createSerialRefresh(refreshRoomsOnce);
 function senderName(id) {
   return rooms.find(r => r.id === selected)?.room_members.find(m => m.user_id === id)?.profiles?.username || 'Former member';
 }
@@ -988,6 +990,13 @@ $('message').addEventListener('blur', () => publishTyping(false));
 $('older').onclick = () => loadHistory(true).catch(e => notify(e.message));
 $('search').oninput = renderRooms;
 window.addEventListener('offline', () => connection('Offline — drafts stay here'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !me) return;
+  refreshRooms().catch(e => notify(e.message));
+  if (Date.now() - lastSocialSafetyRefresh > 120000) refreshSocial().catch(()=>{});
+  if (selected) queueChatReconcile();
+  refreshReadReceipts();
+});
 window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) queueChatReconcile(); } });
 try {
   const saved = JSON.parse(localStorage.getItem('pocketchat-project') || 'null');
