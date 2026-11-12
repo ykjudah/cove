@@ -91,7 +91,7 @@ let typingChannel = null, typingJoinedRoom = null, typingReady = false, typingAc
 const typingUsers = new Map(), typingExpiryTimers = new Map(), inAppNotificationTimers = new Set();
 let color = accent(localStorage.getItem('pocketchat-accent'));
 let desktopUpdate = null;
-const people = new Map();
+const people = new Map(), profileRefreshAt = new Map();
 let friendships = [], blocks = new Set(), socialTab = 'friends', personId = null, socialVersion = 0;
 let socialBusy = false, avatarBusy = false, profileBusy = false, moderationBusy = false;
 let isAppOwner = false, roomSettingsId = null, groupAvatarFile = null;
@@ -129,10 +129,14 @@ async function refreshSocialOnce() {
   ]);
   const nextFriends = checked(rels), nextBlocks = checked(banned);
   const ids = [...new Set([me.id, ...nextFriends.flatMap(r=>[r.sender_id,r.recipient_id]), ...nextBlocks.map(r=>r.blocked_id), ...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])];
-  const profiles = checked(await client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',ids));
+  // Avatar data can be sizable. Do not re-download every known profile on each
+  // friend-list safety refresh; live profile events keep the cache fresh.
+  const now = Date.now(), stale = ids.filter(id => !people.has(id) || now - (profileRefreshAt.get(id) || 0) > 600000);
+  const profiles = stale.length ? checked(await client.from('profiles')
+    .select('id,username,avatar_data,about_me,display_name').in('id',stale)) : [];
   if (currentEpoch !== epoch || version !== socialVersion) return;
   friendships = nextFriends; blocks = new Set(nextBlocks.filter(b=>b.active).map(b=>b.blocked_id)); lastSocialSafetyRefresh=Date.now();
-  for (const p of profiles) people.set(p.id,p);
+  for (const p of profiles) { people.set(p.id,p);profileRefreshAt.set(p.id,Date.now()); }
   profile = people.get(me.id) || profile;
   refreshPeopleViews();
 }
@@ -436,7 +440,10 @@ async function refreshRoomsOnce() {
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
   rooms = data.filter(room=>!hidden.has(room.id));
   if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
-  for(const room of rooms)for(const member of room.room_members)if(member.profiles)people.set(member.user_id,{...member.profiles,id:member.user_id});
+  for(const room of rooms)for(const member of room.room_members)if(member.profiles) {
+    people.set(member.user_id,{...member.profiles,id:member.user_id});
+    profileRefreshAt.set(member.user_id,Date.now());
+  }
   renderRooms(); renderHeader();
 }
 const refreshRooms = createSerialRefresh(refreshRoomsOnce);
@@ -836,7 +843,7 @@ async function enter(user) {
     .on('postgres_changes',{event:'*',schema:'public',table:'friendships'},()=>{if(sessionEpoch===epoch)refreshSocial().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'*',schema:'public',table:'user_blocks'},()=>{if(sessionEpoch===epoch)refreshSocial().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'*',schema:'public',table:'hidden_rooms',filter:'user_id=eq.'+me.id},()=>{if(sessionEpoch===epoch)refreshRooms().catch(e=>notify(e.message));})
-    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},event=>{if(sessionEpoch===epoch && people.has(event.new.id)){people.set(event.new.id,event.new);if(event.new.id===me.id)profile=event.new;refreshPeopleViews();}})
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},event=>{if(sessionEpoch===epoch && people.has(event.new.id)){people.set(event.new.id,event.new);profileRefreshAt.set(event.new.id,Date.now());if(event.new.id===me.id)profile=event.new;refreshPeopleViews();}})
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{if(sessionEpoch===epoch && rooms.some(room=>room.id===event.new.id))refreshRooms().catch(e=>notify(e.message));})
     .subscribe(status => {
       if (sessionEpoch !== epoch) return;
@@ -874,7 +881,7 @@ function leave() {
   $('friend-add').disabled=false;
   $('room-title').textContent = 'Make yourself at home.';
   $('room-subtitle').textContent = 'Choose a conversation or start a new one.';
-  people.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
+  people.clear();profileRefreshAt.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
   for(const id of ['new-dialog','friends-dialog','person-dialog','settings-dialog','room-settings-dialog','moderation-dialog'])$(id).close();
   $('moderation-owner-section').hidden=true;$('moderation-list').replaceChildren();$('social-list').replaceChildren();$('person-actions').replaceChildren();$('person-name').textContent='';$('person-avatar').replaceChildren();$('person-about').textContent='';$('profile-avatar').replaceChildren();$('my-avatar').replaceChildren();$('profile-username').textContent='';$('about-me').value='';$('about-status').textContent='';$('friend-username').value='';$('avatar-file').value='';$('group-avatar-file').value='';$('typing-indicator').hidden=true;
   screen('auth');
