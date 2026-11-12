@@ -60,8 +60,15 @@ create or replace function public.imp_create_3d(
 ) returns uuid language plpgsql security definer set search_path='' as $$
 declare new_game uuid;
 begin
- new_game:=public.imp_create_v2(map_name,imposters,cooldown,task_count,
+ -- The historical walk migration restricts public.imp_create to Keel.
+ -- Reuse the existing v2 validation and lobby setup with Keel, then switch
+ -- the new lobby to the selected authentic 3D map before any round starts.
+ -- Do not broaden the legacy RPC: older clients may still assume Keel only.
+ if map_name is null or map_name not in ('Keel','Caldera','Frostline')
+   then raise exception 'Choose a valid 3D map';end if;
+ new_game:=public.imp_create_v2('Keel',imposters,cooldown,task_count,
   vote_seconds,lobby_name,meeting_cooldown_seconds);
+ update private.imp_games set map=map_name where id=new_game;
  perform private.imp_3d_ensure_shuttle(new_game,auth.uid());
  return new_game;
 end $$;
