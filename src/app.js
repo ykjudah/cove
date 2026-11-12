@@ -1033,6 +1033,7 @@ document.addEventListener('visibilitychange', () => {
   refreshRooms().catch(e => notify(e.message));
   if (Date.now() - lastSocialSafetyRefresh > 120000) refreshSocial().catch(()=>{});
   if (selected) queueChatReconcile();
+  refreshJoinableCalls();refreshActiveGames();
   refreshReadReceipts();
 });
 window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) queueChatReconcile(); } });
@@ -1338,7 +1339,7 @@ async function presenceTick(){
  const rows=checked(await client.rpc('presence_status',{player_ids:ids}));if(session!==epoch)return;for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});}
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
-function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(refreshJoinableCalls,5000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(refreshActiveGames,10000);}
+function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
 function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
@@ -1547,9 +1548,10 @@ async function refreshFinishedGameCards(room,session){
 }
 
 const joinableCalls=new Map();
-let callListTimer;
+let callListTimer,joinableCallsBusy=false;
 async function refreshJoinableCalls(){
-  if(!me)return;
+  if(!me||joinableCallsBusy||document.visibilityState!=='visible')return;
+  joinableCallsBusy=true;
   const session=epoch;
   try{
     const rows=checked(await client.rpc('joinable_chat_calls'));
@@ -1558,6 +1560,7 @@ async function refreshJoinableCalls(){
     for(const row of rows)joinableCalls.set(row.room_id,row);
     renderRooms();
   }catch{/* Try again on the next call refresh. */}
+  finally{joinableCallsBusy=false;}
 }
 function fourSetup(){
   const list=$('games-list'),back=node('button','','← All games'),send=node('button','primary','Send invitation');
