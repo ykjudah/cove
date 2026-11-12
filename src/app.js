@@ -901,6 +901,7 @@ function leave() {
   leaveTypingRoom(); clearInAppNotifications();
   clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);conversationCache.clear();
   inboxLive=false;lastRoomSafetyRefresh=0;lastSocialSafetyRefresh=0;
+  receiptsLastCheck=0;receiptsLastRoom=null;receiptsLastAtBottom=false;
   epoch++; view++; selected = null; me = null; rooms = []; messages.clear(); drafts.clear(); pending.clear(); unread.clear(); parents.clear(); reactions.clear(); replyDrafts.clear(); reactionBusy.clear();
   clearInterval(poll); clearTimeout(refreshTimer);
   if (channel) client.removeChannel(channel).catch(() => {});
@@ -1508,11 +1509,17 @@ window.pocketchatDesktop?.onCapture?.(request=>{
 
 // Account settings and read acknowledgements are authorized by the backend.
 $('account-edit-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),status=$('account-edit-status');button.disabled=true;const session=epoch;try{const name=username($('account-username').value),password=$('account-new-password').value;const result=checked(await client.functions.invoke('update-account',{body:{username:name,currentPassword:$('account-current-password').value,newPassword:password||undefined}}));if(result.error)throw Error(result.error);if(epoch!==session)return;profile.username=name;people.set(me.id,profile);refreshPeopleViews();status.textContent='Account updated. Use your new details next time you sign in.';form.querySelectorAll('input[data-password-field]').forEach(input=>input.value='');}catch(e){status.textContent='Account was not changed: '+e.message;}finally{button.disabled=false;}};
-let receiptsBusy=false;
+let receiptsBusy=false,receiptsLastCheck=0,receiptsLastRoom=null,receiptsLastAtBottom=false;
 $('read-receipts').onchange=async()=>{try{checked(await client.rpc('set_read_receipts',{enabled:$('read-receipts').checked}));refreshReadReceipts();}catch(e){$('read-receipts').checked=!$('read-receipts').checked;notify(e.message);}};
 async function refreshReadReceipts(){
- if(!me||!selected||receiptsBusy||document.visibilityState!=='visible')return;const room=selected,session=epoch;receiptsBusy=true;
- try{const rows=checked(await client.rpc('chat_read_receipts',{target_room:room,mark_read:document.visibilityState==='visible'&&document.hasFocus()&&$('history').scrollHeight-$('history').scrollTop-$('history').clientHeight<120}));if(session!==epoch||selected!==room)return;
+ if(!me||!selected||receiptsBusy||document.visibilityState!=='visible')return;
+ const room=selected,session=epoch,now=Date.now();
+ const atBottom=$('history').scrollHeight-$('history').scrollTop-$('history').clientHeight<120;
+ const newlyReachedBottom=receiptsLastRoom===room&&atBottom&&!receiptsLastAtBottom;
+ if(receiptsLastRoom===room&&now-receiptsLastCheck<4000&&!newlyReachedBottom)return;
+ receiptsLastCheck=now;receiptsLastRoom=room;receiptsLastAtBottom=atBottom;
+ receiptsBusy=true;
+ try{const rows=checked(await client.rpc('chat_read_receipts',{target_room:room,mark_read:document.hasFocus()&&atBottom}));if(session!==epoch||selected!==room)return;
  for(const el of document.querySelectorAll('[data-receipt-time]')){const readers=rows.filter(r=>r.user_id!==me.id&&r.read_at>=el.dataset.receiptTime);el.textContent=readers.length?'Read by '+readers.map(r=>displayPerson(r.user_id)).join(', '):'';}
  }catch{}finally{receiptsBusy=false;}
 }
