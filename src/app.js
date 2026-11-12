@@ -1,4 +1,5 @@
 import {mountImposter} from './imposter.js';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages, imposterDiscoveryInterval, groupAvatarsToRefresh } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -43,6 +44,43 @@ let callView,isAppAdmin=false;
 let client, me, profile, rooms = [], selected = null, messages = new Map();
 let signup = false, channel, poll, epoch = 0, view = 0, loading = false, oldest = null;
 let hasOlder = false, noticeTimer, refreshTimer, refreshVersion = 0;
+const conversationCache = createConversationCache(5);
+let chatOlderTimer = null, chatReconnectTimer = null, lastSocialSafetyRefresh = 0;
+let lastRoomSafetyRefresh = 0, inboxLive = false;
+function saveConversationWindow() {
+  if (!selected || !messages.size) return;
+  // Bound memory per inactive chat as well as the number of cached rooms.
+  // Older history remains available through pagination.
+  const recent = [...messages.values()].sort(compareMessageCursor).slice(-200);
+  const keptIds = new Set(recent.map(m => m.id));
+  const referenced = new Set(recent.map(m => m.reply_to).filter(Boolean));
+  if (replyDrafts.get(selected)) referenced.add(replyDrafts.get(selected));
+  const trimmed = recent.length < messages.size;
+  conversationCache.set(selected, {
+    messages: new Map(recent.map(m => [m.id, m])),
+    parents: new Map([...parents].filter(([id]) => keptIds.has(id) || referenced.has(id))),
+    reactions: new Map([...reactions].filter(([,reaction]) => keptIds.has(reaction.message_id))),
+    oldest: trimmed ? recent[0] : oldest,
+    hasOlder: hasOlder || trimmed, savedAt: Date.now()
+  });
+}
+function loadCachedConversation(roomId) {
+  const cached = conversationCache.get(roomId);
+  if (!cached) return false;
+  for (const [id, value] of cached.messages) messages.set(id, value);
+  for (const [id, value] of cached.parents) parents.set(id, value);
+  for (const [id, value] of cached.reactions) reactions.set(id, value);
+  oldest = cached.oldest; hasOlder = cached.hasOlder;
+  return cached;
+}
+function queueChatReconcile() {
+  clearTimeout(chatReconnectTimer);
+  chatReconnectTimer = setTimeout(() => {
+    if (!me || !selected) return;
+    if (loading) { queueChatReconcile(); return; }
+    loadHistory(false, false).catch(e => notify('Could not sync missed messages: ' + e.message));
+  }, 350);
+}
 const drafts = new Map(), pending = new Map(), unread = new Set();
 const parents = new Map(), reactions = new Map(), replyDrafts = new Map(), reactionBusy = new Set();
 let reactionPicker = null;
@@ -55,7 +93,7 @@ let typingChannel = null, typingJoinedRoom = null, typingReady = false, typingAc
 const typingUsers = new Map(), typingExpiryTimers = new Map(), inAppNotificationTimers = new Set();
 let color = accent(localStorage.getItem('pocketchat-accent'));
 let desktopUpdate = null;
-const people = new Map();
+const people = new Map(), profileRefreshAt = new Map(), roomAvatarCache = new Map();
 let friendships = [], blocks = new Set(), socialTab = 'friends', personId = null, socialVersion = 0;
 let socialBusy = false, avatarBusy = false, profileBusy = false, moderationBusy = false;
 let isAppOwner = false, roomSettingsId = null, groupAvatarFile = null;
@@ -82,9 +120,14 @@ function avatarNode(id, hidden = false, clickable = false) {
 }
 function relationship(id) { return friendships.find(r => r.sender_id === id || r.recipient_id === id); }
 function refreshPeopleViews() {
+  // Room member labels should reference the latest cached profile objects.
+  for (const room of rooms) for (const member of room.room_members) {
+    const current = people.get(member.user_id);
+    if (current) member.profiles = current;
+  }
   renderHeader(); renderRooms(); renderMessages(); renderSocial(); renderPerson(); renderOwnProfile();
 }
-async function refreshSocial() {
+async function refreshSocialOnce() {
   if (!me) return;
   const currentEpoch = epoch, version = ++socialVersion;
   const [rels, banned] = await Promise.all([
@@ -93,13 +136,18 @@ async function refreshSocial() {
   ]);
   const nextFriends = checked(rels), nextBlocks = checked(banned);
   const ids = [...new Set([me.id, ...nextFriends.flatMap(r=>[r.sender_id,r.recipient_id]), ...nextBlocks.map(r=>r.blocked_id), ...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])];
-  const profiles = checked(await client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',ids));
+  // Avatar data can be sizable. Do not re-download every known profile on each
+  // friend-list safety refresh; live profile events keep the cache fresh.
+  const now = Date.now(), stale = ids.filter(id => !people.has(id) || now - (profileRefreshAt.get(id) || 0) > 600000);
+  const profiles = stale.length ? checked(await client.from('profiles')
+    .select('id,username,avatar_data,about_me,display_name').in('id',stale)) : [];
   if (currentEpoch !== epoch || version !== socialVersion) return;
-  friendships = nextFriends; blocks = new Set(nextBlocks.filter(b=>b.active).map(b=>b.blocked_id));
-  for (const p of profiles) people.set(p.id,p);
+  friendships = nextFriends; blocks = new Set(nextBlocks.filter(b=>b.active).map(b=>b.blocked_id)); lastSocialSafetyRefresh=Date.now();
+  for (const p of profiles) { people.set(p.id,p);profileRefreshAt.set(p.id,Date.now()); }
   profile = people.get(me.id) || profile;
   refreshPeopleViews();
 }
+const refreshSocial = createSerialRefresh(refreshSocialOnce);
 async function socialAction(action,id) {
   if (socialBusy || !me) return;
   const target = personData(id);
@@ -389,23 +437,48 @@ function renderRooms() {
   }
   if (!$('rooms').children.length) $('rooms').append(node('p', 'empty', query ? 'No matching conversations.' : 'Your conversations will appear here. Start one with the + button.'));
 }
-async function refreshRooms() {
+async function refreshRoomsOnce() {
   const sessionEpoch = epoch, version = ++refreshVersion;
   const [raw,hiddenResult] = await Promise.all([
-    client.from('rooms').select('id,name,kind,avatar_data,created_at,last_activity_at,room_members(user_id,profiles(id,username,avatar_data,about_me,display_name))').order('created_at', { ascending: false }),
+    client.from('rooms').select('id,name,kind,created_at,last_activity_at,room_members(user_id)').order('created_at', { ascending: false }),
     client.from('hidden_rooms').select('room_id')
   ]);
   const data=checked(raw),hidden=new Set(checked(hiddenResult).map(row=>row.room_id));
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
-  rooms = data.filter(room=>!hidden.has(room.id));
-  if(selected&&!rooms.some(room=>room.id===selected)){showWelcome();return;}
-  for(const room of rooms)for(const member of room.room_members)if(member.profiles)people.set(member.user_id,{...member.profiles,id:member.user_id});
+  const visible = data.filter(room => !hidden.has(room.id));
+  // Reuse profile avatars instead of transmitting them with every room refresh.
+  const unseen = [...new Set(visible.flatMap(room=>room.room_members.map(member=>member.user_id)))]
+    .filter(id=>!people.has(id));
+  const unknownAvatars=groupAvatarsToRefresh(visible,roomAvatarCache);
+  const avatarFetchStartedAt=Date.now();
+  const [fresh,avatars] = await Promise.all([
+    unseen.length ? client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',unseen) : Promise.resolve({data:[],error:null}),
+    unknownAvatars.length ? client.from('rooms').select('id,avatar_data').in('id',unknownAvatars) : Promise.resolve({data:[],error:null})
+  ]);
+  if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
+  for (const p of checked(fresh)) {
+    if ((profileRefreshAt.get(p.id)||0)>avatarFetchStartedAt) continue;
+    people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());
+  }
+  for (const row of checked(avatars)) {
+    if ((roomAvatarCache.get(row.id)?.at||0)>avatarFetchStartedAt) continue;
+    roomAvatarCache.set(row.id,{value:row.avatar_data,at:Date.now()});
+  }
+  rooms = visible.map(room=>({
+    ...room,avatar_data:roomAvatarCache.get(room.id)?.value||null,
+    room_members:room.room_members.map(member=>({
+      ...member,profiles:people.get(member.user_id)||null
+    }))
+  }));
+  lastRoomSafetyRefresh=Date.now();
+  if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
   renderRooms(); renderHeader();
 }
+const refreshRooms = createSerialRefresh(refreshRoomsOnce);
 function senderName(id) {
   return rooms.find(r => r.id === selected)?.room_members.find(m => m.user_id === id)?.profiles?.username || 'Former member';
 }
-function renderMessages(forceBottom = false) {
+function renderMessages(forceBottom = false, preserveScroll = false) {
   if (!me) return;
   if(forceBottom)reactionPicker=null;
   const history = $('history');
@@ -521,22 +594,29 @@ function renderMessages(forceBottom = false) {
   if (searchState?.focused) document.querySelector('.emoji-search')?.focus({ preventScroll: true });
   $('older').hidden = !hasOlder;
   renderReplyDraft();
-  if (reactionPicker) history.scrollTop = previousScroll;
+  if (preserveScroll || reactionPicker) history.scrollTop = previousScroll;
   else if (forceBottom || nearBottom) { history.scrollTop = history.scrollHeight;settleChatScroll(); }
 }
 async function selectRoom(id) {
-  closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
-  if (selected) drafts.set(selected, $('message').value);
-  selected = id;draftEmojiPreview.hidden=true;refreshActiveGames(); unread.delete(id); view++; messages.clear(); parents.clear(); reactions.clear(); reactionPicker = null; oldest = null; hasOlder = false; loading = false;
   const room = rooms.find(r => r.id === id);
   if (!room) throw new Error('Conversation not found. Try again.');
+  if (selected === id && !$('history').hidden) { queueChatReconcile(); return; }
+  closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
+  if (selected) { drafts.set(selected, $('message').value); saveConversationWindow(); }
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);
+  selected = id;draftEmojiPreview.hidden=true;refreshActiveGames(); unread.delete(id); view++; messages.clear(); parents.clear(); reactions.clear(); reactionPicker = null; oldest = null; hasOlder = false; loading = false;
+  const cached = loadCachedConversation(id);
   joinTypingRoom(id);
   renderHeader();
   $('welcome').hidden = true; $('history').hidden = false; $('composer').hidden = false;
   $('message').value = drafts.get(id) || '';
-  renderRooms(); renderMessages();
-  await loadHistory();
-  $('message').focus();
+  renderRooms(); renderMessages(!!cached);
+  const unresolved = [...messages.values()].some(m=>m.reply_to && !parents.has(m.reply_to));
+  // Very recent cached conversations stay current through live message events,
+  // so reopening them need not download the same 50 messages again.
+  if (!cached || !inboxLive || unresolved || Date.now()-cached.savedAt>15000)
+    await loadHistory(false, true);
+  if (selected === id) $('message').focus();
 }
 function openRoomSettings(room) {
   roomSettingsId=room.id;groupAvatarFile=null;$('group-avatar-file').value='';
@@ -550,7 +630,8 @@ function openRoomSettings(room) {
   renderGroupInvites(room);$('room-settings-dialog').showModal();
 }
 function showWelcome() {
-  if(selected)drafts.set(selected,$('message').value);
+  if(selected){drafts.set(selected,$('message').value);saveConversationWindow();}
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);
   leaveTypingRoom();
   selected=null;view++;messages.clear();parents.clear();reactions.clear();replyDrafts.clear();
   $('message').value='';$('history').hidden=true;$('composer').hidden=true;$('welcome').hidden=false;
@@ -565,6 +646,7 @@ async function closeDirectMessage(id=roomSettingsId) {
   if(result.error&&result.error.code!=='23505')throw result.error;
   rooms=rooms.filter(item=>item.id!==room.id);unread.delete(room.id);
   $('room-settings-dialog').close();if(selected===room.id)showWelcome();else renderRooms();
+  conversationCache.delete(room.id);roomAvatarCache.delete(room.id);
   notify('Direct message hidden from your list. Shared history is still saved.');
 }
 async function leaveGroup() {
@@ -573,6 +655,7 @@ async function leaveGroup() {
   checked(await client.rpc('leave_group',{target_room:id}));
   rooms=rooms.filter(item=>item.id!==id);unread.delete(id);
   $('room-settings-dialog').close();if(selected===id)showWelcome();else renderRooms();
+  conversationCache.delete(id);roomAvatarCache.delete(id);
   notify('You left the group. The conversation and shared history remain for its members.');
 }
 async function saveGroupSettings() {
@@ -583,32 +666,61 @@ async function saveGroupSettings() {
     const avatar=groupAvatarFile?await prepareAvatar(groupAvatarFile):room.avatar_data||null;
     const name=$('group-name').value.trim();
     const saved=checked(await client.from('rooms').update({name,avatar_data:avatar}).eq('id',room.id).eq('kind','group').select('id,name,avatar_data').single());
-    Object.assign(room,saved);groupAvatarFile=null;$('group-avatar-file').value='';
+    Object.assign(room,saved);roomAvatarCache.set(room.id,{value:saved.avatar_data,at:Date.now()});groupAvatarFile=null;$('group-avatar-file').value='';
     $('group-avatar-status').textContent=avatar?'Group name and picture saved.':'Group name saved; member pictures are used for the group icon.';
     $('group-picture-remove').hidden=!avatar;
     refreshRooms().catch(e=>notify(e.message));renderHeader();renderRooms();
   } catch(e) { notify(e.message); }
   finally { $('room-settings-save').disabled=false; }
 }
-async function loadHistory(older = false) {
-  if (!selected || loading) return;
+async function loadHistory(older = false, jumpToBottom = false) {
+  if (!selected || loading || (older && (!hasOlder || !oldest))) return;
   const currentView = view, sessionEpoch = epoch, id = selected;
+  const cachedNewest = older ? null : newestMessage(messages.values());
   loading = true; $('older').disabled = true;
+  const stillHere = () => currentView === view && sessionEpoch === epoch && selected === id;
   try {
+    // On reconnect, the cache already holds older history. Reconcile the
+    // latest 20 rows and fetch genuinely missed messages with a cursor.
+    const recentLimit = !older && cachedNewest ? 20 : CHAT_PAGE_SIZE;
     let query = client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
-      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
-    if (older && oldest) query = query.or(`created_at.lt.${oldest.created_at},and(created_at.eq.${oldest.created_at},id.lt.${oldest.id})`);
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(recentLimit);
+    if (older) query = query.or('created_at.lt.' + oldest.created_at + ',and(created_at.eq.' + oldest.created_at + ',id.lt.' + oldest.id + ')');
     const rows = checked(await query);
-    if (currentView !== view || sessionEpoch !== epoch) return;
-    const height = $('history').scrollHeight, scroll = $('history').scrollTop;
+    if (!stillHere()) return;
+    const history = $('history'), height = history.scrollHeight, scroll = history.scrollTop;
     for (const m of rows) mergeMessage(m);
     await loadRelated(rows, currentView, sessionEpoch);
-    if (currentView !== view || sessionEpoch !== epoch) return;
-    oldest = rows.at(-1) || oldest;
-    hasOlder = rows.length === 100;
-    renderMessages(!older);refreshReadReceipts();
-    if (older) $('history').scrollTop = scroll + $('history').scrollHeight - height;
-  } finally { if (currentView === view && sessionEpoch === epoch) { loading = false; $('older').disabled = false; } }
+    if (!stillHere()) return;
+
+    // A long offline interval can contain more than the latest 50 messages.
+    // Catch up using indexed ascending cursors so none are silently skipped.
+    if (!older && cachedNewest && rows.length &&
+        compareMessageCursor(rows.at(-1), cachedNewest) > 0) {
+      await fetchMissedMessages(cachedNewest,
+        async after => checked(await client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
+          .or('created_at.gt.' + after.created_at + ',and(created_at.eq.' + after.created_at + ',id.gt.' + after.id + ')')
+          .order('created_at', {ascending:true}).order('id', {ascending:true})
+          .limit(CHAT_CATCHUP_SIZE)),
+        async next => {
+          const missing = next.filter(m => !messages.has(m.id));
+          for (const m of next) mergeMessage(m);
+          await loadRelated(missing, currentView, sessionEpoch);
+        },
+        stillHere);
+      if (!stillHere()) return;
+    }
+
+    oldest = olderMessage(oldest, rows.at(-1));
+    // A recent-message reconciliation does not tell us whether the older
+    // history already cached in memory has older pages on the server.
+    hasOlder = hasOlderMessages(older, cachedNewest, rows.length, hasOlder);
+    renderMessages(!older && jumpToBottom, older);
+    refreshReadReceipts();
+    if (older) history.scrollTop = scroll + history.scrollHeight - height;
+  } finally {
+    if (stillHere()) { loading = false; $('older').disabled = false; }
+  }
 }
 function connection(text) { $('connection').textContent = text === 'Live updates connected' ? 'Connected' : text; $('connection').title = text; }
 function renderTypingIndicator() {
@@ -719,7 +831,7 @@ async function enter(user) {
   me = user; const sessionEpoch = ++epoch;
   const ownProfile=await client.from('profiles').select('id,username,avatar_data,about_me,display_name').eq('id',me.id).single();
   if(ownProfile.error && ['42703','PGRST204'].includes(ownProfile.error.code))throw new Error('Database update needed: ask the owner to run the account/social SQL migration in Supabase SQL Editor.');
-  profile=checked(ownProfile);people.set(me.id,profile);
+  profile=checked(ownProfile);people.set(me.id,profile);profileRefreshAt.set(me.id,Date.now());
   if (sessionEpoch !== epoch) return;
   client.rpc('read_receipts_enabled').then(r=>{if(!r.error&&sessionEpoch===epoch)$('read-receipts').checked=r.data;});
   $('password').value = ''; $('my-name').textContent = privacy==='off'?profile.username:'You';
@@ -745,7 +857,11 @@ async function enter(user) {
         if (m.sender_id !== me.id && !blocks.has(m.sender_id) && inAppNotifications) Sounds.play('message');
       }
       if(event.eventType==='INSERT'&&m.sender_id!==me.id&&!blocks.has(m.sender_id))desktopPopup(m.room_id,false);
-      if (m.room_id === selected) {
+      if (m?.room_id !== selected) {
+        if (event.eventType === 'INSERT') conversationCache.appendMessage(m);
+        else conversationCache.updateMessage(m);
+      }
+      if (m?.room_id === selected) {
         if (event.eventType === 'INSERT' || messages.has(m.id)) mergeMessage(m);
         else if (!parents.get(m.id)?.deleted_at || m.deleted_at) parents.set(m.id, m);
         renderMessages();refreshReadReceipts();
@@ -753,7 +869,10 @@ async function enter(user) {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, event => {
       if (sessionEpoch !== epoch) return;
-      mergeReaction(event.new); renderMessages();
+      if (event.new?.message_id) {
+        conversationCache.updateReaction(event.new);
+        if (messages.has(event.new.message_id)) { mergeReaction(event.new); renderMessages(); }
+      }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => {
       refreshRooms().catch(e => notify(e.message));
@@ -761,19 +880,37 @@ async function enter(user) {
     .on('postgres_changes',{event:'*',schema:'public',table:'friendships'},()=>{if(sessionEpoch===epoch)refreshSocial().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'*',schema:'public',table:'user_blocks'},()=>{if(sessionEpoch===epoch)refreshSocial().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'*',schema:'public',table:'hidden_rooms',filter:'user_id=eq.'+me.id},()=>{if(sessionEpoch===epoch)refreshRooms().catch(e=>notify(e.message));})
-    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},event=>{if(sessionEpoch===epoch && people.has(event.new.id)){people.set(event.new.id,event.new);if(event.new.id===me.id)profile=event.new;refreshPeopleViews();}})
-    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{if(sessionEpoch===epoch && rooms.some(room=>room.id===event.new.id))refreshRooms().catch(e=>notify(e.message));})
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},event=>{if(sessionEpoch===epoch && people.has(event.new.id)){people.set(event.new.id,event.new);profileRefreshAt.set(event.new.id,Date.now());if(event.new.id===me.id)profile=event.new;refreshPeopleViews();}})
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{
+      if(sessionEpoch!==epoch||!rooms.some(room=>room.id===event.new.id))return;
+      // Realtime updates images instantly without putting them in every
+      // periodic room-list response. Re-fetch if a payload omitted the image.
+      if(Object.hasOwn(event.new,'avatar_data'))
+        roomAvatarCache.set(event.new.id,{value:event.new.avatar_data,at:Date.now()});
+      else roomAvatarCache.delete(event.new.id);
+      refreshRooms().catch(e=>notify(e.message));
+    })
     .subscribe(status => {
       if (sessionEpoch !== epoch) return;
-      connection(status === 'SUBSCRIBED' ? 'Live updates connected' : 'Reconnecting…');
+      inboxLive = status === 'SUBSCRIBED';
+      connection(inboxLive ? 'Live updates connected' : 'Reconnecting…');
       if (status === 'SUBSCRIBED') {
         refreshRooms().catch(e => notify(e.message));
-        // Refetch on connection/reconnection to recover missed events.
-        if (selected) selectRoom(selected).catch(e => notify(e.message));
+        // Keep the current scroll position and fetch only recent/missed messages.
+        if (selected) queueChatReconcile();
       }
     });
   // Recovers room invitations even if an event was missed. Message catch-up happens on reconnect.
-  poll = setInterval(() => Promise.all([refreshRooms(),refreshSocial()]).catch(() => connection('Connection interrupted')), 30000);
+  poll = setInterval(() => {
+    if (!me || document.visibilityState !== 'visible') return;
+    // Realtime keeps active sessions current. Poll faster only when disconnected.
+    const roomInterval = inboxLive ? 120000 : 30000;
+    const socialInterval = inboxLive ? 180000 : 60000;
+    if (Date.now() - lastRoomSafetyRefresh >= roomInterval)
+      refreshRooms().catch(() => connection('Connection interrupted'));
+    if (Date.now() - lastSocialSafetyRefresh >= socialInterval)
+      refreshSocial().catch(() => connection('Connection interrupted'));
+  }, 30000);
 }
 function leave() {
  callView?.dispose();callView=null;
@@ -782,6 +919,9 @@ function leave() {
  stopSocialLive();imposter.close();imposterOpenedRounds.clear();
   closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
   leaveTypingRoom(); clearInAppNotifications();
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);conversationCache.clear();
+  inboxLive=false;lastRoomSafetyRefresh=0;lastSocialSafetyRefresh=0;
+  receiptsLastCheck=0;receiptsLastRoom=null;receiptsLastAtBottom=false;
   epoch++; view++; selected = null; me = null; rooms = []; messages.clear(); drafts.clear(); pending.clear(); unread.clear(); parents.clear(); reactions.clear(); replyDrafts.clear(); reactionBusy.clear();
   clearInterval(poll); clearTimeout(refreshTimer);
   if (channel) client.removeChannel(channel).catch(() => {});
@@ -792,7 +932,7 @@ function leave() {
   $('friend-add').disabled=false;
   $('room-title').textContent = 'Make yourself at home.';
   $('room-subtitle').textContent = 'Choose a conversation or start a new one.';
-  people.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
+  people.clear();profileRefreshAt.clear();roomAvatarCache.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
   for(const id of ['new-dialog','friends-dialog','person-dialog','settings-dialog','room-settings-dialog','moderation-dialog'])$(id).close();
   $('moderation-owner-section').hidden=true;$('moderation-list').replaceChildren();$('social-list').replaceChildren();$('person-actions').replaceChildren();$('person-name').textContent='';$('person-avatar').replaceChildren();$('person-about').textContent='';$('profile-avatar').replaceChildren();$('my-avatar').replaceChildren();$('profile-username').textContent='';$('about-me').value='';$('about-status').textContent='';$('friend-username').value='';$('avatar-file').value='';$('group-avatar-file').value='';$('typing-indicator').hidden=true;
   screen('auth');
@@ -908,7 +1048,15 @@ $('message').addEventListener('blur', () => publishTyping(false));
 $('older').onclick = () => loadHistory(true).catch(e => notify(e.message));
 $('search').oninput = renderRooms;
 window.addEventListener('offline', () => connection('Offline — drafts stay here'));
-window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) selectRoom(selected).catch(e => notify(e.message)); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !me) return;
+  refreshRooms().catch(e => notify(e.message));
+  if (Date.now() - lastSocialSafetyRefresh > 120000) refreshSocial().catch(()=>{});
+  if (selected) queueChatReconcile();
+  refreshJoinableCalls();refreshActiveGames();presenceTick();
+  refreshReadReceipts();
+});
+window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) queueChatReconcile(); } });
 try {
   const saved = JSON.parse(localStorage.getItem('pocketchat-project') || 'null');
   if (saved) { const config = backend(saved.url, saved.key); $('project-url').value = config.url; $('project-key').value = config.key; connect(config); }
@@ -1196,6 +1344,7 @@ $('games-close').classList.add('game-close-button');$('games-close').innerHTML='
 // Session heartbeats give one status per account, including multiple devices.
 const presenceSession=crypto.randomUUID(),presenceMap=new Map();
 let presenceTimer=null,activeGamesTimer=null,presenceBusy=false,dockToken=0;
+const gameCardReconciledAt = new Map(), gameRoomsPreviouslyActive = new Set();
 const activeGamesDock=node('section','active-games-dock');activeGamesDock.id='active-games-dock';activeGamesDock.setAttribute('aria-label','Active games in this chat');activeGamesDock.hidden=true;$('typing-indicator').before(activeGamesDock);
 function paintPresenceElement(el){
  const id=el.dataset.presenceId;if(!id)return;const data=presenceMap.get(id),known=data&&Date.now()-data.at<90000,state=known?(data.online?'online':'offline'):'unknown';
@@ -1206,15 +1355,38 @@ function paintPresenceElement(el){
 function paintPresence(){document.querySelectorAll('[data-presence-id]').forEach(paintPresenceElement);const label=$('person-presence');if(label){label.dataset.presenceId=personId||'';if(personId)paintPresenceElement(label);}}
 async function presenceTick(){
  if(!me||presenceBusy)return;presenceBusy=true;const session=epoch;
- try{checked(await client.rpc('touch_presence',{session_id:presenceSession,is_online:true}));const ids=[...new Set([me.id,...people.keys(),...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])].slice(0,200);
- const rows=checked(await client.rpc('presence_status',{player_ids:ids}));if(session!==epoch)return;for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});}
+ try{
+  checked(await client.rpc('touch_presence',{session_id:presenceSession,is_online:true}));
+  // Remain online while minimized, but do not download everyone else's
+  // presence until the user can actually see those indicators.
+  if(document.visibilityState==='visible'){
+   const ids=[...new Set([me.id,...people.keys(),...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])].slice(0,200);
+   const rows=checked(await client.rpc('presence_status',{player_ids:ids}));
+   if(session!==epoch)return;
+   for(const row of rows||[])presenceMap.set(row.player_id,{online:row.online,at:Date.now()});
+  }
+ }
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
-function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(refreshJoinableCalls,5000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(refreshActiveGames,10000);}
-function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
+function startSocialLive(){stopSocialLive();impInviteCount();refreshJoinableCalls();callListTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshJoinableCalls();},8000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(()=>{if(document.visibilityState==='visible')refreshActiveGames();},10000);}
+function stopSocialLive(){clearTimeout(impInviteTimer);impInviteGeneration++;impInviteBusy=false;impInviteFastUntil=0;$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
- try{const rows=checked(await client.rpc('active_chat_games',{target_room:id}));await refreshFinishedGameCards(id,session);if(token!==dockToken||session!==epoch||selected!==id)return;const h=$('history'),keepBottom=h.scrollHeight-h.scrollTop-h.clientHeight<100;activeGamesDock.replaceChildren();activeGamesDock.hidden=!rows?.length;if(keepBottom)settleChatScroll();if(!rows?.length)return;
+ try{
+   const rows=checked(await client.rpc('active_chat_games',{target_room:id}));
+   if(token!==dockToken||session!==epoch||selected!==id)return;
+   const hasActive=Boolean(rows?.length),wasActive=gameRoomsPreviouslyActive.has(id);
+   const lastCheck=gameCardReconciledAt.get(id)||0;
+   // Active games stay responsive. Inactive game cards reconcile less often,
+   // but a transition from playing to finished always checks immediately.
+   if(needsGameCardReconcile(hasActive,wasActive,lastCheck,Date.now())){
+     await refreshFinishedGameCards(id,session);
+     if(token!==dockToken||session!==epoch||selected!==id)return;
+     gameCardReconciledAt.set(id,Date.now());
+   }
+   if(hasActive)gameRoomsPreviouslyActive.add(id);
+   else gameRoomsPreviouslyActive.delete(id);
+   if(token!==dockToken||session!==epoch||selected!==id)return;const h=$('history'),keepBottom=h.scrollHeight-h.scrollTop-h.clientHeight<100;activeGamesDock.replaceChildren();activeGamesDock.hidden=!rows?.length;if(keepBottom)settleChatScroll();if(!rows?.length)return;
  const heading=node('small','','Active games'),strip=node('div','active-game-shortcuts');activeGamesDock.append(heading,strip);
  for(const row of rows.slice(0,2)){const b=node('button','active-game-shortcut',row.label+(row.turn_id===me.id?' · Your turn':''));b.type='button';b.onclick=()=>row.mode==='four'?jumpToFour(row.game_id):row.mode==='golf'?openGolf(row.game_id):row.mode==='chess'?openChess(row.game_id):openPool(row.game_id);strip.append(b);}
  }catch{if(token===dockToken){activeGamesDock.hidden=true;}}
@@ -1331,7 +1503,15 @@ function renderGroupInvites(room){groupInviteBox.replaceChildren();groupInviteBo
 // Keep the latest message visible when the dock/composer or loaded images change height.
 let chatScrollPinned=true,chatScrollFrame=0;
 function settleChatScroll(){const room=selected;cancelAnimationFrame(chatScrollFrame);chatScrollFrame=requestAnimationFrame(()=>{if(selected!==room)return;const h=$('history');h.scrollTop=h.scrollHeight;chatScrollPinned=true;});}
-$('history').addEventListener('scroll',()=>{const h=$('history');chatScrollPinned=h.scrollHeight-h.scrollTop-h.clientHeight<80;if(!chatScrollPinned)cancelAnimationFrame(chatScrollFrame);},{passive:true});
+$('history').addEventListener('scroll',()=>{
+  const h=$('history');chatScrollPinned=h.scrollHeight-h.scrollTop-h.clientHeight<80;
+  if(!chatScrollPinned)cancelAnimationFrame(chatScrollFrame);
+  // Automatically load older history just before the top is reached.
+  if(h.scrollTop<180 && selected && hasOlder && !loading) {
+    clearTimeout(chatOlderTimer);
+    chatOlderTimer=setTimeout(()=>loadHistory(true).catch(e=>notify(e.message)),120);
+  }
+},{passive:true});
 new ResizeObserver(()=>{if(chatScrollPinned)settleChatScroll();}).observe($('history'));
 $('history').addEventListener('load',()=>{if(chatScrollPinned)settleChatScroll();},true);
 
@@ -1359,15 +1539,21 @@ window.pocketchatDesktop?.onCapture?.(request=>{
 
 // Account settings and read acknowledgements are authorized by the backend.
 $('account-edit-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),status=$('account-edit-status');button.disabled=true;const session=epoch;try{const name=username($('account-username').value),password=$('account-new-password').value;const result=checked(await client.functions.invoke('update-account',{body:{username:name,currentPassword:$('account-current-password').value,newPassword:password||undefined}}));if(result.error)throw Error(result.error);if(epoch!==session)return;profile.username=name;people.set(me.id,profile);refreshPeopleViews();status.textContent='Account updated. Use your new details next time you sign in.';form.querySelectorAll('input[data-password-field]').forEach(input=>input.value='');}catch(e){status.textContent='Account was not changed: '+e.message;}finally{button.disabled=false;}};
-let receiptsBusy=false;
+let receiptsBusy=false,receiptsLastCheck=0,receiptsLastRoom=null,receiptsLastAtBottom=false;
 $('read-receipts').onchange=async()=>{try{checked(await client.rpc('set_read_receipts',{enabled:$('read-receipts').checked}));refreshReadReceipts();}catch(e){$('read-receipts').checked=!$('read-receipts').checked;notify(e.message);}};
 async function refreshReadReceipts(){
- if(!me||!selected||receiptsBusy)return;const room=selected,session=epoch;receiptsBusy=true;
- try{const rows=checked(await client.rpc('chat_read_receipts',{target_room:room,mark_read:document.visibilityState==='visible'&&document.hasFocus()&&$('history').scrollHeight-$('history').scrollTop-$('history').clientHeight<120}));if(session!==epoch||selected!==room)return;
+ if(!me||!selected||receiptsBusy||document.visibilityState!=='visible')return;
+ const room=selected,session=epoch,now=Date.now();
+ const atBottom=$('history').scrollHeight-$('history').scrollTop-$('history').clientHeight<120;
+ const newlyReachedBottom=receiptsLastRoom===room&&atBottom&&!receiptsLastAtBottom;
+ if(receiptsLastRoom===room&&now-receiptsLastCheck<4000&&!newlyReachedBottom)return;
+ receiptsLastCheck=now;receiptsLastRoom=room;receiptsLastAtBottom=atBottom;
+ receiptsBusy=true;
+ try{const rows=checked(await client.rpc('chat_read_receipts',{target_room:room,mark_read:document.hasFocus()&&atBottom}));if(session!==epoch||selected!==room)return;
  for(const el of document.querySelectorAll('[data-receipt-time]')){const readers=rows.filter(r=>r.user_id!==me.id&&r.read_at>=el.dataset.receiptTime);el.textContent=readers.length?'Read by '+readers.map(r=>displayPerson(r.user_id)).join(', '):'';}
  }catch{}finally{receiptsBusy=false;}
 }
-setInterval(refreshReadReceipts,5000);
+setInterval(refreshReadReceipts,10000);
 window.addEventListener('focus',refreshReadReceipts);
 $('history').addEventListener('scroll',()=>{clearTimeout(receiptScrollTimer);receiptScrollTimer=setTimeout(refreshReadReceipts,300);});let receiptScrollTimer;
 
@@ -1391,9 +1577,10 @@ async function refreshFinishedGameCards(room,session){
 }
 
 const joinableCalls=new Map();
-let callListTimer;
+let callListTimer,joinableCallsBusy=false;
 async function refreshJoinableCalls(){
-  if(!me)return;
+  if(!me||joinableCallsBusy||document.visibilityState!=='visible')return;
+  joinableCallsBusy=true;
   const session=epoch;
   try{
     const rows=checked(await client.rpc('joinable_chat_calls'));
@@ -1402,6 +1589,7 @@ async function refreshJoinableCalls(){
     for(const row of rows)joinableCalls.set(row.room_id,row);
     renderRooms();
   }catch{/* Try again on the next call refresh. */}
+  finally{joinableCallsBusy=false;}
 }
 function fourSetup(){
   const list=$('games-list'),back=node('button','','← All games'),send=node('button','primary','Send invitation');
@@ -1449,10 +1637,20 @@ for(const [id,key] of [['desktop-popups','cove-popups'],['tray-toggle','cove-tra
 if(desktop?.windows && $('tray-toggle').checked)desktop.setTray(true).catch(e=>notify(e.message));
 function desktopPopup(room,call){if(desktop?.windows && $('desktop-popups').checked)desktop.desktopNotice({room,call}).catch(()=>{});}
 desktop?.openNotice?.(room=>{if(me&&rooms.some(r=>r.id===room))selectRoom(room).catch(e=>notify(e.message));});
+let impInviteTimer,impInviteBusy=false,impInviteGeneration=0,impInviteFastUntil=0;
+const gameRpc = bridgeImposterRpc(async(name,args)=>checked(await client.rpc(name,args)));
 const recoveredGame=globalThis.CoveImposter3D?.mountImposter;
 const imposter=typeof recoveredGame==='function'
   ? recoveredGame({
-      rpc:bridgeImposterRpc(async(name,args)=>checked(await client.rpc(name,args))),
+      rpc:async(name,args)=>{
+        const result=await gameRpc(name,args);
+        if(name==='imp_create'||(name==='imp_action'&&args?.act==='join')){
+          impInviteFastUntil=Date.now()+30000;
+          clearTimeout(impInviteTimer);
+          impInviteTimer=setTimeout(impInviteCount,100);
+        }
+        return result;
+      },
       user:()=>me?.id,
       label:id=>personLabel(id),
       friends:()=>friendships.filter(r=>r.status==='accepted').map(r=>r.sender_id===me.id?r.recipient_id:r.sender_id).filter(id=>!blocks.has(id))
@@ -1462,18 +1660,26 @@ const imposter=typeof recoveredGame==='function'
 const imposterOpenedRounds=new Map();
 $('open-games').onclick=()=>imposter.open();
 
-let impInviteTimer;
 async function impInviteCount(){
- const session=epoch;if(!me)return;
+ const session=epoch,generation=impInviteGeneration;
+ if(!me||impInviteBusy)return;
+ impInviteBusy=true;
+ let interval=2500;
  try{
   const rows=checked(await client.rpc('imp_list_v2'));
-  if(epoch!==session)return;
+  if(epoch!==session||generation!==impInviteGeneration)return;
+  interval=imposterDiscoveryInterval(rows,impInviteFastUntil);
   const n=rows.filter(r=>!r.joined&&r.phase==='lobby').length;
   $('imp-invites').textContent=n?n+' open':'';
-  // When a host begins a new round, open the game for every joined player.
-  // A closed window stays closed for the rest of that round; do not nag users.
+  // Joined accounts retain the original 2.5-second game-start checks.
+  // A closed window stays closed for the rest of that round.
   const active=rows.find(r=>r.joined&&r.round_number>0&&
    ['play','meeting','finished'].includes(r.phase)&&imposterOpenedRounds.get(r.id)!==r.round_number);
   if(active){imposterOpenedRounds.set(active.id,active.round_number);imposter.open(active.id);}
- }catch{}
+ }catch{}finally{
+  if(generation===impInviteGeneration){
+   impInviteBusy=false;
+   if(epoch===session&&me)impInviteTimer=setTimeout(impInviteCount,interval);
+  }
+ }
 }

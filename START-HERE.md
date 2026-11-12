@@ -1,6 +1,6 @@
 # Cove development and release setup
 
-Cove now displays **2.8.1** and the internal updater version is **2.8.1**. This unreleased recovery integrates the original Three.js Imposter game from a checksum-pinned Cove 1.7.0 archive with the newer v2 multiplayer features. The next tag is **v2.8.1**, only after the final backend migration and multiplayer testing. Do not reuse existing tags.
+Next release: **Cove 2.8.2 — Optimization Update**. Package/updater and display versions must both be 2.8.2; the Keel 3D Imposter and existing Supabase schema are unchanged. This update reduces redundant chat/profile/presence queries, adds message pagination and reconnect catch-up, and retains full chat history. Public distribution requires verified updater signing and all three release assets.
 
 1. Work from the Git checkout connected to https://github.com/ykjudah/cove.
 2. Use a task branch and pull request. Windows builds run for main, the initial setup branch, pull requests to main, and manual dispatches. Non-tag builds do not release anything.
@@ -9,4 +9,4 @@ Cove now displays **2.8.1** and the internal updater version is **2.8.1**. This 
 5. Verify a Windows test build and the required backend changes before tagging. After a matching tag is pushed, CI tests, builds, verifies its update signature, and prepares a DRAFT GitHub release.
 6. Test installation and upgrade from the currently distributed Windows app, confirm accounts/settings survive, and review patch notes and database readiness before publishing that draft.
 
-Installer filenames use the internal version, for example `Cove-2.8.1-Setup-x64.exe`. The displayed version also matches 2.8.1. A build without the signing secret is for installation testing only and is not eligible for updater distribution.
+Installer filenames use the internal version, for example `Cove-2.8.2-Setup-x64.exe`. The displayed version also matches 2.8.2. A build without the signing secret is for installation testing only and is not eligible for updater distribution.

@@ -4,9 +4,11 @@ See [START-HERE.md](START-HERE.md) for the current procedure and [supabase/READM
 
 ## Versions
 
-- Public display: `release-config.json` (`2.8.1`).
-- Internal updater/package version: `package.json` and `package-lock.json` (`2.8.1`). Keep internal versions increasing; do not reset them to match display branding.
-- Release tag: `v` plus the full internal version (`v2.8.1`).
+Next release: **v2.8.2 — Optimization Update**. It optimizes chat loading and Supabase traffic while retaining full chat history, existing backend permissions, and the verified Keel 3D Imposter game. No database migration is required for this update.
+
+- Public display: `release-config.json` (`2.8.2`).
+- Internal updater/package version: `package.json` and `package-lock.json` (`2.8.2`). Keep internal versions increasing; do not reset them to match display branding.
+- Release tag: `v` plus the full internal version (`v2.8.2`).
 - Installer: `Cove-${version}-Setup-${arch}.exe`, using the internal version.
 
 ## Version bridge

@@ -8,7 +8,11 @@ const root=path.join(__dirname,'..');
 
 test('Windows releases include original recoverable 3D game, styles and licenses',()=>{
   const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-  assert.equal(pkg.version,'2.8.1');
+  const lock=JSON.parse(fs.readFileSync(path.join(root,'package-lock.json'),'utf8'));
+  const release=JSON.parse(fs.readFileSync(path.join(root,'release-config.json'),'utf8'));
+  assert.equal(pkg.version,lock.version,'updater and lockfile versions must match');
+  assert.equal(pkg.version,lock.packages[''].version,'lockfile root package must match');
+  assert.equal(pkg.version,release.displayVersion,'display version must match the packaged app');
   for(const file of ['imposter-3d-legacy.js','imposter-3d-legacy.css','IMPOSTER-3D-LICENSES.txt'])
     assert.ok(pkg.build.files.includes(file),file);
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
