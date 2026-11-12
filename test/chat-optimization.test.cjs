@@ -62,6 +62,14 @@ test('cursor catch-up rejects nonadvancing pages rather than looping forever',as
  await assert.rejects(fetchMissedMessages(cursor,async()=>[cursor],async()=>{},()=>true),/Non-advancing/);
 });
 
+test('joined Imposter games keep original fast auto-open polling',async()=>{
+ const {imposterDiscoveryInterval}=await helpers();
+ assert.equal(imposterDiscoveryInterval([{joined:true,phase:'lobby'}]),2500);
+ assert.equal(imposterDiscoveryInterval([{joined:true,phase:'finished'}]),2500);
+ assert.equal(imposterDiscoveryInterval([{joined:false,phase:'lobby'}]),8000);
+ assert.equal(imposterDiscoveryInterval([]),8000);
+});
+
 test('reconnecting does not discard older message pagination',async()=>{
  const {hasOlderMessages,needsGameCardReconcile}=await helpers();
  const cached={id:'m20',created_at:'2026-11-11T12:00:00Z'};
@@ -139,6 +147,8 @@ test('Cove UI pages 50 messages, catches up after reconnect and preserves 3D mul
  assert.match(app,/renderMessages\(!older && jumpToBottom, older\)/);
  assert.match(app,/hasOlderMessages\(older, cachedNewest, rows\.length, hasOlder\)/);
  assert.match(app,/needsGameCardReconcile\(hasActive,wasActive,lastCheck,Date\.now\(\)\)/);
+ assert.match(app,/imposterDiscoveryInterval\(rows\)/);
+ assert.match(app,/impInviteTimer=setTimeout\(impInviteCount,interval\)/);
  assert.match(app,/\.limit\(CHAT_CATCHUP_SIZE\)/);
  assert.match(app,/fetchMissedMessages\(cachedNewest/);
  assert.match(app,/loadHistory\(true\)/);
