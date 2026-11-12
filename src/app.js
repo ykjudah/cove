@@ -803,7 +803,8 @@ async function enter(user) {
         if (m.sender_id !== me.id && !blocks.has(m.sender_id) && inAppNotifications) Sounds.play('message');
       }
       if(event.eventType==='INSERT'&&m.sender_id!==me.id&&!blocks.has(m.sender_id))desktopPopup(m.room_id,false);
-      if (m.room_id === selected) {
+      if (m?.room_id !== selected) conversationCache.updateMessage(m);
+      if (m?.room_id === selected) {
         if (event.eventType === 'INSERT' || messages.has(m.id)) mergeMessage(m);
         else if (!parents.get(m.id)?.deleted_at || m.deleted_at) parents.set(m.id, m);
         renderMessages();refreshReadReceipts();
@@ -811,7 +812,9 @@ async function enter(user) {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, event => {
       if (sessionEpoch !== epoch) return;
-      mergeReaction(event.new); renderMessages();
+      if (event.new?.message_id) {
+        mergeReaction(event.new); conversationCache.updateReaction(event.new); renderMessages();
+      }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => {
       refreshRooms().catch(e => notify(e.message));
@@ -826,12 +829,18 @@ async function enter(user) {
       connection(status === 'SUBSCRIBED' ? 'Live updates connected' : 'Reconnecting…');
       if (status === 'SUBSCRIBED') {
         refreshRooms().catch(e => notify(e.message));
-        // Refetch on connection/reconnection to recover missed events.
-        if (selected) selectRoom(selected).catch(e => notify(e.message));
+        // Keep the current scroll position and fetch only recent/missed messages.
+        if (selected) queueChatReconcile();
       }
     });
   // Recovers room invitations even if an event was missed. Message catch-up happens on reconnect.
-  poll = setInterval(() => Promise.all([refreshRooms(),refreshSocial()]).catch(() => connection('Connection interrupted')), 30000);
+  poll = setInterval(() => {
+    if (!me || document.visibilityState !== 'visible') return;
+    refreshRooms().catch(() => connection('Connection interrupted'));
+    // Social data is updated via Realtime; this is just a safety refresh.
+    if (Date.now() - lastSocialSafetyRefresh > 120000)
+      refreshSocial().catch(() => connection('Connection interrupted'));
+  }, 60000);
 }
 function leave() {
  callView?.dispose();callView=null;
@@ -840,6 +849,7 @@ function leave() {
  stopSocialLive();imposter.close();imposterOpenedRounds.clear();
   closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
   leaveTypingRoom(); clearInAppNotifications();
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);conversationCache.clear();
   epoch++; view++; selected = null; me = null; rooms = []; messages.clear(); drafts.clear(); pending.clear(); unread.clear(); parents.clear(); reactions.clear(); replyDrafts.clear(); reactionBusy.clear();
   clearInterval(poll); clearTimeout(refreshTimer);
   if (channel) client.removeChannel(channel).catch(() => {});
@@ -966,7 +976,7 @@ $('message').addEventListener('blur', () => publishTyping(false));
 $('older').onclick = () => loadHistory(true).catch(e => notify(e.message));
 $('search').oninput = renderRooms;
 window.addEventListener('offline', () => connection('Offline — drafts stay here'));
-window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) selectRoom(selected).catch(e => notify(e.message)); } });
+window.addEventListener('online', () => { if(!me&&client)restoreSavedSession();if (me) { refreshRooms().catch(e => notify(e.message)); if (selected) queueChatReconcile(); } });
 try {
   const saved = JSON.parse(localStorage.getItem('pocketchat-project') || 'null');
   if (saved) { const config = backend(saved.url, saved.key); $('project-url').value = config.url; $('project-key').value = config.key; connect(config); }
@@ -1389,7 +1399,15 @@ function renderGroupInvites(room){groupInviteBox.replaceChildren();groupInviteBo
 // Keep the latest message visible when the dock/composer or loaded images change height.
 let chatScrollPinned=true,chatScrollFrame=0;
 function settleChatScroll(){const room=selected;cancelAnimationFrame(chatScrollFrame);chatScrollFrame=requestAnimationFrame(()=>{if(selected!==room)return;const h=$('history');h.scrollTop=h.scrollHeight;chatScrollPinned=true;});}
-$('history').addEventListener('scroll',()=>{const h=$('history');chatScrollPinned=h.scrollHeight-h.scrollTop-h.clientHeight<80;if(!chatScrollPinned)cancelAnimationFrame(chatScrollFrame);},{passive:true});
+$('history').addEventListener('scroll',()=>{
+  const h=$('history');chatScrollPinned=h.scrollHeight-h.scrollTop-h.clientHeight<80;
+  if(!chatScrollPinned)cancelAnimationFrame(chatScrollFrame);
+  // Automatically load older history just before the top is reached.
+  if(h.scrollTop<180 && selected && hasOlder && !loading) {
+    clearTimeout(chatOlderTimer);
+    chatOlderTimer=setTimeout(()=>loadHistory(true).catch(e=>notify(e.message)),120);
+  }
+},{passive:true});
 new ResizeObserver(()=>{if(chatScrollPinned)settleChatScroll();}).observe($('history'));
 $('history').addEventListener('load',()=>{if(chatScrollPinned)settleChatScroll();},true);
 
@@ -1420,12 +1438,12 @@ $('account-edit-form').onsubmit=async event=>{event.preventDefault();const form=
 let receiptsBusy=false;
 $('read-receipts').onchange=async()=>{try{checked(await client.rpc('set_read_receipts',{enabled:$('read-receipts').checked}));refreshReadReceipts();}catch(e){$('read-receipts').checked=!$('read-receipts').checked;notify(e.message);}};
 async function refreshReadReceipts(){
- if(!me||!selected||receiptsBusy)return;const room=selected,session=epoch;receiptsBusy=true;
+ if(!me||!selected||receiptsBusy||document.visibilityState!=='visible')return;const room=selected,session=epoch;receiptsBusy=true;
  try{const rows=checked(await client.rpc('chat_read_receipts',{target_room:room,mark_read:document.visibilityState==='visible'&&document.hasFocus()&&$('history').scrollHeight-$('history').scrollTop-$('history').clientHeight<120}));if(session!==epoch||selected!==room)return;
  for(const el of document.querySelectorAll('[data-receipt-time]')){const readers=rows.filter(r=>r.user_id!==me.id&&r.read_at>=el.dataset.receiptTime);el.textContent=readers.length?'Read by '+readers.map(r=>displayPerson(r.user_id)).join(', '):'';}
  }catch{}finally{receiptsBusy=false;}
 }
-setInterval(refreshReadReceipts,5000);
+setInterval(refreshReadReceipts,10000);
 window.addEventListener('focus',refreshReadReceipts);
 $('history').addEventListener('scroll',()=>{clearTimeout(receiptScrollTimer);receiptScrollTimer=setTimeout(refreshReadReceipts,300);});let receiptScrollTimer;
 
