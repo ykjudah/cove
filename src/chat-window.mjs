@@ -47,6 +47,12 @@ export function hasOlderMessages(older, cachedNewest, rowsFetched, priorHasOlder
   return older || !cachedNewest ? rowsFetched === pageSize : priorHasOlder;
 }
 
+export function groupAvatarsToRefresh(rooms, cache, now = Date.now()) {
+  return rooms.filter(room => room.kind === 'group' &&
+    (!cache.has(room.id) || now - (cache.get(room.id)?.at || 0) > 600000))
+    .map(room => room.id);
+}
+
 export function imposterDiscoveryInterval(rows) {
   // Never delay a joined player's lobby/round auto-open checks. Unjoined
   // accounts only need an occasional game-list badge refresh.
