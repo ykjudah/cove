@@ -48,9 +48,18 @@ const conversationCache = createConversationCache(5);
 let chatOlderTimer = null, chatReconnectTimer = null, lastSocialSafetyRefresh = 0;
 function saveConversationWindow() {
   if (!selected || !messages.size) return;
+  // Bound memory per inactive chat as well as the number of cached rooms.
+  // Older history remains available through pagination.
+  const recent = [...messages.values()].sort(compareMessageCursor).slice(-200);
+  const keptIds = new Set(recent.map(m => m.id));
+  const referenced = new Set(recent.map(m => m.reply_to).filter(Boolean));
+  const trimmed = recent.length < messages.size;
   conversationCache.set(selected, {
-    messages: new Map(messages), parents: new Map(parents), reactions: new Map(reactions),
-    oldest, hasOlder
+    messages: new Map(recent.map(m => [m.id, m])),
+    parents: new Map([...parents].filter(([id]) => keptIds.has(id) || referenced.has(id))),
+    reactions: new Map([...reactions].filter(([,reaction]) => keptIds.has(reaction.message_id))),
+    oldest: trimmed ? recent[0] : oldest,
+    hasOlder: hasOlder || trimmed
   });
 }
 function loadCachedConversation(roomId) {
@@ -425,7 +434,7 @@ async function refreshRooms() {
   const data=checked(raw),hidden=new Set(checked(hiddenResult).map(row=>row.room_id));
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
   rooms = data.filter(room=>!hidden.has(room.id));
-  if(selected&&!rooms.some(room=>room.id===selected)){showWelcome();return;}
+  if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
   for(const room of rooms)for(const member of room.room_members)if(member.profiles)people.set(member.user_id,{...member.profiles,id:member.user_id});
   renderRooms(); renderHeader();
 }
@@ -596,6 +605,7 @@ async function closeDirectMessage(id=roomSettingsId) {
   if(result.error&&result.error.code!=='23505')throw result.error;
   rooms=rooms.filter(item=>item.id!==room.id);unread.delete(room.id);
   $('room-settings-dialog').close();if(selected===room.id)showWelcome();else renderRooms();
+  conversationCache.delete(room.id);
   notify('Direct message hidden from your list. Shared history is still saved.');
 }
 async function leaveGroup() {
@@ -604,6 +614,7 @@ async function leaveGroup() {
   checked(await client.rpc('leave_group',{target_room:id}));
   rooms=rooms.filter(item=>item.id!==id);unread.delete(id);
   $('room-settings-dialog').close();if(selected===id)showWelcome();else renderRooms();
+  conversationCache.delete(id);
   notify('You left the group. The conversation and shared history remain for its members.');
 }
 async function saveGroupSettings() {
@@ -813,7 +824,8 @@ async function enter(user) {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, event => {
       if (sessionEpoch !== epoch) return;
       if (event.new?.message_id) {
-        mergeReaction(event.new); conversationCache.updateReaction(event.new); renderMessages();
+        conversationCache.updateReaction(event.new);
+        if (messages.has(event.new.message_id)) { mergeReaction(event.new); renderMessages(); }
       }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => {
