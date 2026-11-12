@@ -94,6 +94,9 @@ test('supports all three recovered 3D maps and their correct Electrical rooms',a
    catch(err){err.message='3D '+act+' action: '+err.message;throw err;}
   };
   await user(0);
+  const creationInputs=(await db.query(
+   "select auth.uid() is null as missing_user, 'Caldera' not in ('Keel','Caldera','Frostline') as bad_map")).rows[0];
+  console.log('[3D map test] creation validation:',JSON.stringify(creationInputs));
   console.log('[3D map test] stage 1: direct v2 creation');
   const baseline=(await db.query('select public.imp_create_v2($1,$2,$3,$4,$5,$6,$7) id',
    ['Caldera',1,5,2,20,'Baseline Caldera',30])).rows[0].id;
