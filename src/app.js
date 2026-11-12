@@ -1,4 +1,5 @@
 import {mountImposter} from './imposter.js';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -43,6 +44,32 @@ let callView,isAppAdmin=false;
 let client, me, profile, rooms = [], selected = null, messages = new Map();
 let signup = false, channel, poll, epoch = 0, view = 0, loading = false, oldest = null;
 let hasOlder = false, noticeTimer, refreshTimer, refreshVersion = 0;
+const conversationCache = createConversationCache(5);
+let chatOlderTimer = null, chatReconnectTimer = null, lastSocialSafetyRefresh = 0;
+function saveConversationWindow() {
+  if (!selected || !messages.size) return;
+  conversationCache.set(selected, {
+    messages: new Map(messages), parents: new Map(parents), reactions: new Map(reactions),
+    oldest, hasOlder
+  });
+}
+function loadCachedConversation(roomId) {
+  const cached = conversationCache.get(roomId);
+  if (!cached) return false;
+  for (const [id, value] of cached.messages) messages.set(id, value);
+  for (const [id, value] of cached.parents) parents.set(id, value);
+  for (const [id, value] of cached.reactions) reactions.set(id, value);
+  oldest = cached.oldest; hasOlder = cached.hasOlder;
+  return true;
+}
+function queueChatReconcile() {
+  clearTimeout(chatReconnectTimer);
+  chatReconnectTimer = setTimeout(() => {
+    if (!me || !selected) return;
+    if (loading) { queueChatReconcile(); return; }
+    loadHistory(false, false).catch(e => notify('Could not sync missed messages: ' + e.message));
+  }, 350);
+}
 const drafts = new Map(), pending = new Map(), unread = new Set();
 const parents = new Map(), reactions = new Map(), replyDrafts = new Map(), reactionBusy = new Set();
 let reactionPicker = null;
@@ -95,7 +122,7 @@ async function refreshSocial() {
   const ids = [...new Set([me.id, ...nextFriends.flatMap(r=>[r.sender_id,r.recipient_id]), ...nextBlocks.map(r=>r.blocked_id), ...rooms.flatMap(r=>r.room_members.map(m=>m.user_id))])];
   const profiles = checked(await client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',ids));
   if (currentEpoch !== epoch || version !== socialVersion) return;
-  friendships = nextFriends; blocks = new Set(nextBlocks.filter(b=>b.active).map(b=>b.blocked_id));
+  friendships = nextFriends; blocks = new Set(nextBlocks.filter(b=>b.active).map(b=>b.blocked_id)); lastSocialSafetyRefresh=Date.now();
   for (const p of profiles) people.set(p.id,p);
   profile = people.get(me.id) || profile;
   refreshPeopleViews();
@@ -525,18 +552,21 @@ function renderMessages(forceBottom = false) {
   else if (forceBottom || nearBottom) { history.scrollTop = history.scrollHeight;settleChatScroll(); }
 }
 async function selectRoom(id) {
-  closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
-  if (selected) drafts.set(selected, $('message').value);
-  selected = id;draftEmojiPreview.hidden=true;refreshActiveGames(); unread.delete(id); view++; messages.clear(); parents.clear(); reactions.clear(); reactionPicker = null; oldest = null; hasOlder = false; loading = false;
   const room = rooms.find(r => r.id === id);
   if (!room) throw new Error('Conversation not found. Try again.');
+  if (selected === id && !$('history').hidden) { queueChatReconcile(); return; }
+  closePool();closeChess();closeGolf();closeLeaderboards();$('games-dialog').close();$('composer-emoji-dialog').close();
+  if (selected) { drafts.set(selected, $('message').value); saveConversationWindow(); }
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);
+  selected = id;draftEmojiPreview.hidden=true;refreshActiveGames(); unread.delete(id); view++; messages.clear(); parents.clear(); reactions.clear(); reactionPicker = null; oldest = null; hasOlder = false; loading = false;
+  const cached = loadCachedConversation(id);
   joinTypingRoom(id);
   renderHeader();
   $('welcome').hidden = true; $('history').hidden = false; $('composer').hidden = false;
   $('message').value = drafts.get(id) || '';
-  renderRooms(); renderMessages();
-  await loadHistory();
-  $('message').focus();
+  renderRooms(); renderMessages(cached);
+  await loadHistory(false, true);
+  if (selected === id) $('message').focus();
 }
 function openRoomSettings(room) {
   roomSettingsId=room.id;groupAvatarFile=null;$('group-avatar-file').value='';
@@ -550,7 +580,8 @@ function openRoomSettings(room) {
   renderGroupInvites(room);$('room-settings-dialog').showModal();
 }
 function showWelcome() {
-  if(selected)drafts.set(selected,$('message').value);
+  if(selected){drafts.set(selected,$('message').value);saveConversationWindow();}
+  clearTimeout(chatOlderTimer);clearTimeout(chatReconnectTimer);
   leaveTypingRoom();
   selected=null;view++;messages.clear();parents.clear();reactions.clear();replyDrafts.clear();
   $('message').value='';$('history').hidden=true;$('composer').hidden=true;$('welcome').hidden=false;
