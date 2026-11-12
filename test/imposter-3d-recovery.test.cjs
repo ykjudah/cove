@@ -1,0 +1,71 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const {pathToFileURL}=require('node:url');
+const root=path.join(__dirname,'..');
+
+test('Windows releases include original recoverable 3D game, styles and licenses',()=>{
+  const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+  assert.equal(pkg.version,'2.8.1');
+  for(const file of ['imposter-3d-legacy.js','imposter-3d-legacy.css','IMPOSTER-3D-LICENSES.txt'])
+    assert.ok(pkg.build.files.includes(file),file);
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  assert.match(html,/imposter-3d-legacy\.js/);
+  assert.match(html,/imposter-3d-legacy\.css/);
+  const app=fs.readFileSync(path.join(root,'src/app.js'),'utf8');
+  assert.match(app,/CoveImposter3D\?\.mountImposter/);
+  assert.match(app,/bridgeImposterRpc/);
+  assert.match(app,/No 2D fallback/);
+  if(!process.env.CI)return;
+  const bundle=fs.readFileSync(path.join(root,'imposter-3d-legacy.js'),'utf8');
+  const css=fs.readFileSync(path.join(root,'imposter-3d-legacy.css'),'utf8');
+  assert.match(bundle,/function createScene3D\(/);
+  assert.match(bundle,/option\("Map", current\.map && current\.map !== "Keel" \? \["Keel", current\.map\] : \["Keel"\]/);
+  assert.match(bundle,/function wardrobePreview\(/);
+  assert.match(bundle,/function crewModel\(/);
+  assert.match(bundle,/function taskPuzzle\(/);
+  assert.match(bundle,/function wirePuzzle\(/);
+  assert.match(bundle,/function step3D\(/);
+  assert.match(bundle,/function motionTrack\(/);
+  assert.match(bundle,/ack\.revision === packet\.revision/);
+  assert.match(bundle,/data-imposter-action=kill/);
+  assert.match(bundle,/dataset\.imposterAction = "kill"/);
+  assert.match(bundle,/Kill · /);
+  assert.doesNotMatch(bundle,/Eliminate " \+ label\(p\.uid\)/);
+  assert.match(bundle,/Latest vote results/);
+  assert.match(bundle,/data-imposter-action=meeting/);
+  assert.match(bundle,/data-imposter-action=sabotage/);
+  assert.match(bundle,/Manage crew/);
+  assert.match(bundle,/Lobby name/);
+  assert.match(css,/\.imp-wire-board/);
+  assert.match(css,/\.imp-wardrobe-panel/);
+  const context={globalThis:{}};
+  vm.runInNewContext(bundle,context,{timeout:5000});
+  assert.equal(typeof context.globalThis.CoveImposter3D.mountImposter,'function');
+  assert.ok(fs.statSync(path.join(root,'IMPOSTER-3D-LICENSES.txt')).size>500);
+});
+
+test('3D client uses new server APIs and server-authoritative kills',async()=>{
+  const {bridgeImposterRpc}=await import(pathToFileURL(path.join(root,'src/imposter-bridge.mjs')).href);
+  const calls=[];
+  const adapter=bridgeImposterRpc(async(name,args)=>{
+    calls.push({name,args});return {name,args};
+  });
+  await adapter('imp_list');
+  await adapter('imp_create',{map_name:'Keel',imposters:1,cooldown:10,task_count:3,vote_seconds:45});
+  await adapter('imp_steps',{game_id:'example',revision:4,steps:[[.3,0]]});
+  await adapter('imp_action',{game_id:'example',act:'kill',arg:'attack-user-id'});
+  await adapter('imp_action',{game_id:'example',act:'cleanup',arg:''});
+  await adapter('imp_action',{game_id:'example',act:'configure',arg:JSON.stringify({tasks:3,name:'Voyage',meeting_cooldown:60})});
+  assert.equal(calls[0].name,'imp_list_v2');
+  assert.equal(calls[1].name,'imp_create_3d');
+  assert.equal(calls[1].args.meeting_cooldown_seconds,30);
+  assert.equal(calls[2].name,'imp_steps_3d');
+  assert.equal(calls[3].name,'imp_3d_action');
+  assert.equal(calls[3].args.act,'kill_nearest');
+  assert.equal(calls[3].args.arg,'');
+  assert.equal(calls[4].args.act,'read');
+  assert.deepEqual(JSON.parse(calls[5].args.arg),{tasks:3,name:'Voyage',meeting_cooldown:60});
+});
