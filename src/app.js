@@ -93,7 +93,7 @@ let typingChannel = null, typingJoinedRoom = null, typingReady = false, typingAc
 const typingUsers = new Map(), typingExpiryTimers = new Map(), inAppNotificationTimers = new Set();
 let color = accent(localStorage.getItem('pocketchat-accent'));
 let desktopUpdate = null;
-const people = new Map(), profileRefreshAt = new Map();
+const people = new Map(), profileRefreshAt = new Map(), roomAvatarCache = new Map();
 let friendships = [], blocks = new Set(), socialTab = 'friends', personId = null, socialVersion = 0;
 let socialBusy = false, avatarBusy = false, profileBusy = false, moderationBusy = false;
 let isAppOwner = false, roomSettingsId = null, groupAvatarFile = null;
@@ -440,7 +440,7 @@ function renderRooms() {
 async function refreshRoomsOnce() {
   const sessionEpoch = epoch, version = ++refreshVersion;
   const [raw,hiddenResult] = await Promise.all([
-    client.from('rooms').select('id,name,kind,avatar_data,created_at,last_activity_at,room_members(user_id)').order('created_at', { ascending: false }),
+    client.from('rooms').select('id,name,kind,created_at,last_activity_at,room_members(user_id)').order('created_at', { ascending: false }),
     client.from('hidden_rooms').select('room_id')
   ]);
   const data=checked(raw),hidden=new Set(checked(hiddenResult).map(row=>row.room_id));
@@ -449,13 +449,22 @@ async function refreshRoomsOnce() {
   // Reuse profile avatars instead of transmitting them with every room refresh.
   const unseen = [...new Set(visible.flatMap(room=>room.room_members.map(member=>member.user_id)))]
     .filter(id=>!people.has(id));
-  const fresh = unseen.length ? checked(await client.from('profiles')
-    .select('id,username,avatar_data,about_me,display_name').in('id',unseen)) : [];
+  const now=Date.now(), unknownAvatars=visible
+    .filter(room=>room.kind==='group'&&(!roomAvatarCache.has(room.id)||now-(roomAvatarCache.get(room.id)?.at||0)>600000))
+    .map(room=>room.id);
+  const [fresh,avatars] = await Promise.all([
+    unseen.length ? client.from('profiles').select('id,username,avatar_data,about_me,display_name').in('id',unseen) : Promise.resolve({data:[],error:null}),
+    unknownAvatars.length ? client.from('rooms').select('id,avatar_data').in('id',unknownAvatars) : Promise.resolve({data:[],error:null})
+  ]);
   if (sessionEpoch !== epoch || version !== refreshVersion || !me) return;
-  for (const p of fresh) {people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());}
-  rooms = visible.map(room=>({...room,room_members:room.room_members.map(member=>({
-    ...member,profiles:people.get(member.user_id)||null
-  }))}));
+  for (const p of checked(fresh)) {people.set(p.id,p);profileRefreshAt.set(p.id,Date.now());}
+  for (const row of checked(avatars)) roomAvatarCache.set(row.id,{value:row.avatar_data,at:Date.now()});
+  rooms = visible.map(room=>({
+    ...room,avatar_data:roomAvatarCache.get(room.id)?.value||null,
+    room_members:room.room_members.map(member=>({
+      ...member,profiles:people.get(member.user_id)||null
+    }))
+  }));
   lastRoomSafetyRefresh=Date.now();
   if(selected&&!rooms.some(room=>room.id===selected)){const missing=selected;showWelcome();conversationCache.delete(missing);return;}
   renderRooms(); renderHeader();
@@ -652,7 +661,7 @@ async function saveGroupSettings() {
     const avatar=groupAvatarFile?await prepareAvatar(groupAvatarFile):room.avatar_data||null;
     const name=$('group-name').value.trim();
     const saved=checked(await client.from('rooms').update({name,avatar_data:avatar}).eq('id',room.id).eq('kind','group').select('id,name,avatar_data').single());
-    Object.assign(room,saved);groupAvatarFile=null;$('group-avatar-file').value='';
+    Object.assign(room,saved);roomAvatarCache.set(room.id,{value:saved.avatar_data,at:Date.now()});groupAvatarFile=null;$('group-avatar-file').value='';
     $('group-avatar-status').textContent=avatar?'Group name and picture saved.':'Group name saved; member pictures are used for the group icon.';
     $('group-picture-remove').hidden=!avatar;
     refreshRooms().catch(e=>notify(e.message));renderHeader();renderRooms();
@@ -867,7 +876,15 @@ async function enter(user) {
     .on('postgres_changes',{event:'*',schema:'public',table:'user_blocks'},()=>{if(sessionEpoch===epoch)refreshSocial().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'*',schema:'public',table:'hidden_rooms',filter:'user_id=eq.'+me.id},()=>{if(sessionEpoch===epoch)refreshRooms().catch(e=>notify(e.message));})
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},event=>{if(sessionEpoch===epoch && people.has(event.new.id)){people.set(event.new.id,event.new);profileRefreshAt.set(event.new.id,Date.now());if(event.new.id===me.id)profile=event.new;refreshPeopleViews();}})
-    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{if(sessionEpoch===epoch && rooms.some(room=>room.id===event.new.id))refreshRooms().catch(e=>notify(e.message));})
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'rooms'},event=>{
+      if(sessionEpoch!==epoch||!rooms.some(room=>room.id===event.new.id))return;
+      // Realtime updates images instantly without putting them in every
+      // periodic room-list response. Re-fetch if a payload omitted the image.
+      if(Object.hasOwn(event.new,'avatar_data'))
+        roomAvatarCache.set(event.new.id,{value:event.new.avatar_data,at:Date.now()});
+      else roomAvatarCache.delete(event.new.id);
+      refreshRooms().catch(e=>notify(e.message));
+    })
     .subscribe(status => {
       if (sessionEpoch !== epoch) return;
       inboxLive = status === 'SUBSCRIBED';
@@ -910,7 +927,7 @@ function leave() {
   $('friend-add').disabled=false;
   $('room-title').textContent = 'Make yourself at home.';
   $('room-subtitle').textContent = 'Choose a conversation or start a new one.';
-  people.clear();profileRefreshAt.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
+  people.clear();profileRefreshAt.clear();roomAvatarCache.clear();friendships=[];blocks.clear();personId=null;socialVersion++;socialBusy=false;avatarBusy=false;profileBusy=false;isAppOwner=false;isAppAdmin=false;roomSettingsId=null;groupAvatarFile=null;
   for(const id of ['new-dialog','friends-dialog','person-dialog','settings-dialog','room-settings-dialog','moderation-dialog'])$(id).close();
   $('moderation-owner-section').hidden=true;$('moderation-list').replaceChildren();$('social-list').replaceChildren();$('person-actions').replaceChildren();$('person-name').textContent='';$('person-avatar').replaceChildren();$('person-about').textContent='';$('profile-avatar').replaceChildren();$('my-avatar').replaceChildren();$('profile-username').textContent='';$('about-me').value='';$('about-status').textContent='';$('friend-username').value='';$('avatar-file').value='';$('group-avatar-file').value='';$('typing-indicator').hidden=true;
   screen('auth');
