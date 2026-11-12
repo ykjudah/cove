@@ -62,6 +62,20 @@ test('cursor catch-up rejects nonadvancing pages rather than looping forever',as
  await assert.rejects(fetchMissedMessages(cursor,async()=>[cursor],async()=>{},()=>true),/Non-advancing/);
 });
 
+test('group avatars are fetched separately and refreshed only when needed',async()=>{
+ const {groupAvatarsToRefresh}=await helpers();
+ const rooms=[{id:'dm',kind:'dm'},{id:'groupA',kind:'group'},{id:'groupB',kind:'group'},{id:'groupC',kind:'group'}];
+ const cache=new Map([
+  ['groupA',{value:'image',at:1000000}],
+  ['groupB',{value:null,at:1000000-600001}]
+ ]);
+ assert.deepEqual(groupAvatarsToRefresh(rooms,cache,1000000),['groupB','groupC']);
+ cache.set('groupB',{value:'new image',at:1000000});
+ cache.set('groupC',{value:null,at:1000000});
+ assert.deepEqual(groupAvatarsToRefresh(rooms,cache,1000000),[]);
+ assert.deepEqual(groupAvatarsToRefresh(rooms,cache,1600001),['groupA','groupB','groupC']);
+});
+
 test('joined Imposter games keep original fast auto-open polling',async()=>{
  const {imposterDiscoveryInterval}=await helpers();
  assert.equal(imposterDiscoveryInterval([{joined:true,phase:'lobby'}]),2500);
@@ -158,6 +172,10 @@ test('Cove UI pages 50 messages, catches up after reconnect and preserves 3D mul
  assert.match(app,/createSerialRefresh\(refreshRoomsOnce\)/);
  assert.match(app,/createSerialRefresh\(refreshSocialOnce\)/);
  assert.match(app,/room_members\(user_id\)'\)/);
+ assert.match(app,/groupAvatarsToRefresh\(visible,roomAvatarCache\)/);
+ assert.match(app,/\.select\('id,avatar_data'\)\.in\('id',unknownAvatars\)/);
+ assert.match(app,/roomAvatarCache\.set\(event\.new\.id/);
+ assert.doesNotMatch(app,/\.select\('id,name,kind,avatar_data,created_at,last_activity_at,room_members/);
  assert.match(app,/conversationCache\.appendMessage\(m\)/);
  assert.match(app,/Date\.now\(\)-cached\.savedAt>15000/);
  assert.match(app,/document\.visibilityState !== 'visible'/);
