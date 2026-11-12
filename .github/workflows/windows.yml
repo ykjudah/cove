@@ -107,3 +107,68 @@ jobs:
             dist/*-Setup-x64.exe
             dist/*.blockmap
             dist/latest.yml
+
+  # One-time 2.8.2 release: require passing Windows tests and existing
+  # pinned-key updater signing. Older tags and future versions are untouched.
+  release_optimization_282:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Cove-Windows-test-build
+          path: dist
+      - name: Verify and publish Cove 2.8.2 signed assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view v2.8.2 --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Cove 2.8.2 already released; not overwriting it."
+            exit 0
+          fi
+          test -s dist/Cove-2.8.2-Setup-x64.exe
+          test -s dist/Cove-2.8.2-Setup-x64.exe.blockmap
+          test -s dist/latest.yml
+          grep -Eq '^version: ["'\''"]?2[.]8[.]2["'\''"]?$' dist/latest.yml || {
+            echo "Wrong updater version; cannot publish"; exit 1;
+          }
+          grep -Eq '^pocketchatSignature: .+' dist/latest.yml || {
+            echo "Unsigned updater manifest; cannot publish"; exit 1;
+          }
+          cat > "$RUNNER_TEMP/cove-2.8.2-notes.md" <<'RELEASE_NOTES'
+          ## Cove 2.8.2 — Optimization Update
+
+          Faster conversations and reduced Supabase traffic, without deleting messages.
+
+          ### Messaging
+          - Load the newest 50 messages first and older history on scroll
+          - Cache recent conversations for faster switching
+          - Recover missed messages after reconnecting
+          - Preserve replies, reactions, attachments and read receipts
+
+          ### Performance and multiplayer
+          - Reduce duplicate background requests
+          - Cache profile pictures and group images
+          - Improve room, friends, calls and presence sync efficiency
+          - Reduce idle-game checks, while preserving fast updates for joined players
+          - Keep the original 3D Keel Imposter game and smooth movement
+
+          ### Installation
+          Cove can automatically update existing compatible installations to v2.8.2.
+          The release includes the Windows installer, blockmap and signed update manifest.
+          RELEASE_NOTES
+          gh release create v2.8.2 \
+            dist/Cove-2.8.2-Setup-x64.exe \
+            dist/Cove-2.8.2-Setup-x64.exe.blockmap \
+            dist/latest.yml \
+            --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "Cove v2.8.2 — Optimization Update" \
+            --notes-file "$RUNNER_TEMP/cove-2.8.2-notes.md" \
+            --latest
