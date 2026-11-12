@@ -51,6 +51,20 @@ test('cached message edits and reactions update without opening a room',async()=
  assert.equal(cache.get('room').reactions.get('m:user:👍').active,true,'older events cannot overwrite new reaction status');
 });
 
+test('live inserts keep inactive chats current without unbounded memory',async()=>{
+ const {createConversationCache}=await helpers();
+ const cache=createConversationCache(2);
+ const entry={messages:new Map(),parents:new Map(),reactions:new Map(),oldest:null,hasOlder:false};
+ cache.set('room',entry);
+ for(let i=0;i<220;i++)cache.appendMessage({id:'m'+String(i).padStart(3,'0'),
+   room_id:'room',body:'message '+i,created_at:'2026-11-11T12:00:00Z'});
+ assert.equal(entry.messages.size,200);
+ assert.equal(entry.messages.has('m000'),false);
+ assert.equal(entry.messages.has('m219'),true);
+ assert.equal(entry.oldest.id,'m020');
+ assert.equal(entry.hasOlder,true);
+});
+
 test('coalescing multiple simultaneous refresh requests performs one trailing retry',async()=>{
  const {createSerialRefresh}=await helpers();
  let releaseFirst, calls=0;
@@ -76,6 +90,9 @@ test('Cove UI pages 50 messages, catches up after reconnect and preserves 3D mul
  assert.match(app,/conversationCache\.clear\(\)/);
  assert.match(app,/createSerialRefresh\(refreshRoomsOnce\)/);
  assert.match(app,/createSerialRefresh\(refreshSocialOnce\)/);
+ assert.match(app,/room_members\(user_id\)'\)/);
+ assert.match(app,/conversationCache\.appendMessage\(m\)/);
+ assert.match(app,/Date\.now\(\)-cached\.savedAt>15000/);
  assert.match(app,/document\.visibilityState !== 'visible'/);
  assert.match(app,/globalThis\.CoveImposter3D\?\.mountImposter/);
  assert.match(app,/bridgeImposterRpc/);
