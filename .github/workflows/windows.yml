@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, codex/setup-cove]
+    branches: [main, codex/setup-cove, release-prep/v2.8.1]
     tags: ['v*']
 permissions:
   contents: read
@@ -62,6 +62,14 @@ jobs:
           $version = (Get-Content package.json | ConvertFrom-Json).version
           if ($env:GITHUB_REF_NAME -ne "v$version") { throw "Tag must be v$version" }
           if (-not $env:POCKETCHAT_UPDATE_SIGNING_KEY) { throw 'Missing POCKETCHAT_UPDATE_SIGNING_KEY repository secret' }
+      - name: Verify signing is configured for the 2.8.1 draft
+        if: github.ref == 'refs/heads/release-prep/v2.8.1'
+        shell: pwsh
+        env:
+          POCKETCHAT_UPDATE_SIGNING_KEY: ${{ secrets.POCKETCHAT_UPDATE_SIGNING_KEY }}
+        run: |
+          if ((Get-Content package.json | ConvertFrom-Json).version -ne '2.8.1') { throw 'Unexpected release version' }
+          if (-not $env:POCKETCHAT_UPDATE_SIGNING_KEY) { throw 'Missing updater signing key: cannot prepare a trusted release' }
       - run: npm run dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -77,6 +85,12 @@ jobs:
           } else {
             Write-Warning 'Unsigned test build only. Add the existing signing key before tagging a release.'
           }
+      - name: Verify signed manifest for the 2.8.1 draft
+        if: github.ref == 'refs/heads/release-prep/v2.8.1'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/latest.yml)) { throw 'Missing updater manifest' }
+          if (-not (Select-String -Path dist/latest.yml -Pattern '^pocketchatSignature:' -Quiet)) { throw 'Unsigned updater manifest: aborting draft' }
       - uses: actions/upload-artifact@v4
         with:
           name: Cove-Windows-test-build
@@ -86,7 +100,7 @@ jobs:
             dist/latest.yml
           if-no-files-found: error
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/release-prep/v2.8.1'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -96,7 +110,42 @@ jobs:
         with:
           name: Cove-Windows-test-build
           path: dist
+      - name: Create 2.8.1 draft release with trusted Windows assets
+        if: github.ref == 'refs/heads/release-prep/v2.8.1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'RELEASE_NOTES'
+          ## Cove 2.8.1 — Original 3D Imposter restored
+
+          The authentic **Keel** 3D map, crewmates, camera, walkable shuttle lobby, wardrobe, original task interactions, vents, and wire-repair sabotage are back.
+
+          ### Improvements
+          - Smoother multiplayer movement with revision-based position reconciliation and player synchronization
+          - Persistent named lobbies: play another round without recreating the lobby; only the host closes it
+          - Automatic game opening for joined players when a new round starts
+          - Emergency meeting cooldown with an on-screen timer and a record of who voted for whom
+          - One persistent Kill button that selects the closest eligible in-range player, with a cooldown countdown
+          - Report and sabotage controls with clear availability and countdowns
+          - Host kicking and administrator deletion of any open Imposter lobby
+
+          The game currently supports **Keel only**. More maps will come in future updates.
+
+          ### Installation
+          On Windows, use the signed installer below, or open Cove and choose **Check for updates**. Test automatic updating on an existing installation before distributing this release broadly.
+          RELEASE_NOTES
+          gh release create v2.8.1 \
+            dist/Cove-2.8.1-Setup-x64.exe \
+            dist/Cove-2.8.1-Setup-x64.exe.blockmap \
+            dist/latest.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --target e3ff984720931c90004e7951ef6d0c66ff1df73f \
+            --draft \
+            --title "Cove v2.8.1 — 3D Imposter restored" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
       - name: Prepare draft release for final verification
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           draft: true
