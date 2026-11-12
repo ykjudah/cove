@@ -23,6 +23,20 @@ test('messages are ordered by timestamp then ID without dropping ties',async()=>
  assert.equal(newestMessage([]),null);
 });
 
+test('reconnecting does not discard older message pagination',async()=>{
+ const {hasOlderMessages,needsGameCardReconcile}=await helpers();
+ const cached={id:'m20',created_at:'2026-11-11T12:00:00Z'};
+ assert.equal(hasOlderMessages(false,cached,10,true),true,'recent data must not hide older cached pages');
+ assert.equal(hasOlderMessages(false,cached,10,false),false,'a short refresh cannot create imaginary older pages');
+ assert.equal(hasOlderMessages(false,null,50,false),true,'initial full page indicates earlier history may exist');
+ assert.equal(hasOlderMessages(false,null,10,true),false,'initial partial page ends history');
+ assert.equal(hasOlderMessages(true,null,0,true),false,'empty older page ends pagination');
+ assert.equal(needsGameCardReconcile(false,false,5000,6000),false,'idle cards are not re-polled at 10s');
+ assert.equal(needsGameCardReconcile(false,false,5000,51000),true,'idle safety check still happens');
+ assert.equal(needsGameCardReconcile(true,false,5000,6000),true,'active games are always checked');
+ assert.equal(needsGameCardReconcile(false,true,5000,6000),true,'finish transitions are checked immediately');
+});
+
 test('recent conversation cache evicts least recently used and never uses disk',async()=>{
  const {createConversationCache}=await helpers();
  const cache=createConversationCache(2);
@@ -82,7 +96,10 @@ test('coalescing multiple simultaneous refresh requests performs one trailing re
 });
 
 test('Cove UI pages 50 messages, catches up after reconnect and preserves 3D multiplayer',()=>{
- assert.match(app,/\.limit\(CHAT_PAGE_SIZE\)/);
+ assert.match(app,/\.limit\(recentLimit\)/);
+ assert.match(app,/renderMessages\(!older && jumpToBottom, older\)/);
+ assert.match(app,/hasOlderMessages\(older, cachedNewest, rows\.length, hasOlder\)/);
+ assert.match(app,/needsGameCardReconcile\(hasActive,wasActive,lastCheck,Date\.now\(\)\)/);
  assert.match(app,/\.limit\(CHAT_CATCHUP_SIZE\)/);
  assert.match(app,/loadHistory\(true\)/);
  assert.match(app,/newestMessage\(messages\.values\(\)\)/);
