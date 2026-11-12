@@ -1,5 +1,5 @@
 import {mountImposter} from './imposter.js';
-import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile } from './chat-window.mjs';
+import { CHAT_PAGE_SIZE, CHAT_CATCHUP_SIZE, compareMessageCursor, newestMessage, olderMessage, createConversationCache, createSerialRefresh, hasOlderMessages, needsGameCardReconcile, fetchMissedMessages } from './chat-window.mjs';
 import {bridgeImposterRpc} from './imposter-bridge.mjs';
 import {fourThumbnail, fourBoard} from './four-in-a-row.js';
 const Sounds = require('./sounds.cjs');
@@ -683,20 +683,18 @@ async function loadHistory(older = false, jumpToBottom = false) {
     // Catch up using indexed ascending cursors so none are silently skipped.
     if (!older && cachedNewest && rows.length &&
         compareMessageCursor(rows.at(-1), cachedNewest) > 0) {
-      let after = cachedNewest, batch;
-      do {
-        const next = checked(await client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
+      await fetchMissedMessages(cachedNewest,
+        async after => checked(await client.from('messages').select(MESSAGE_FIELDS).eq('room_id', id)
           .or('created_at.gt.' + after.created_at + ',and(created_at.eq.' + after.created_at + ',id.gt.' + after.id + ')')
           .order('created_at', {ascending:true}).order('id', {ascending:true})
-          .limit(CHAT_CATCHUP_SIZE));
-        if (!stillHere()) return;
-        const missing = next.filter(m => !messages.has(m.id));
-        for (const m of next) mergeMessage(m);
-        await loadRelated(missing, currentView, sessionEpoch);
-        if (!stillHere()) return;
-        batch = next.length;
-        if (batch) after = next.at(-1);
-      } while (batch === CHAT_CATCHUP_SIZE);
+          .limit(CHAT_CATCHUP_SIZE)),
+        async next => {
+          const missing = next.filter(m => !messages.has(m.id));
+          for (const m of next) mergeMessage(m);
+          await loadRelated(missing, currentView, sessionEpoch);
+        },
+        stillHere);
+      if (!stillHere()) return;
     }
 
     oldest = olderMessage(oldest, rows.at(-1));
