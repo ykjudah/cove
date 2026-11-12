@@ -1322,6 +1322,7 @@ $('games-close').classList.add('game-close-button');$('games-close').innerHTML='
 // Session heartbeats give one status per account, including multiple devices.
 const presenceSession=crypto.randomUUID(),presenceMap=new Map();
 let presenceTimer=null,activeGamesTimer=null,presenceBusy=false,dockToken=0;
+const gameCardReconciledAt = new Map(), gameRoomsPreviouslyActive = new Set();
 const activeGamesDock=node('section','active-games-dock');activeGamesDock.id='active-games-dock';activeGamesDock.setAttribute('aria-label','Active games in this chat');activeGamesDock.hidden=true;$('typing-indicator').before(activeGamesDock);
 function paintPresenceElement(el){
  const id=el.dataset.presenceId;if(!id)return;const data=presenceMap.get(id),known=data&&Date.now()-data.at<90000,state=known?(data.online?'online':'offline'):'unknown';
@@ -1337,10 +1338,24 @@ async function presenceTick(){
  catch{}finally{presenceBusy=false;if(session===epoch)paintPresence();}
 }
 function startSocialLive(){stopSocialLive();impInviteCount();impInviteTimer=setInterval(impInviteCount,2500);refreshJoinableCalls();callListTimer=setInterval(refreshJoinableCalls,5000);presenceTick();refreshActiveGames();presenceTimer=setInterval(presenceTick,20000);activeGamesTimer=setInterval(refreshActiveGames,10000);}
-function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
+function stopSocialLive(){clearInterval(impInviteTimer);$('imp-invites').textContent='';clearInterval(callListTimer);joinableCalls.clear();clearInterval(presenceTimer);clearInterval(activeGamesTimer);presenceMap.clear();gameCardReconciledAt.clear();gameRoomsPreviouslyActive.clear();dockToken++;activeGamesDock.replaceChildren();activeGamesDock.hidden=true;}
 async function refreshActiveGames(){
  const id=selected,session=epoch,token=++dockToken;if(!me||!id){activeGamesDock.hidden=true;return;}if(activeGamesDock.dataset.room!==id){activeGamesDock.replaceChildren();activeGamesDock.hidden=true;activeGamesDock.dataset.room=id;}
- try{const rows=checked(await client.rpc('active_chat_games',{target_room:id}));await refreshFinishedGameCards(id,session);if(token!==dockToken||session!==epoch||selected!==id)return;const h=$('history'),keepBottom=h.scrollHeight-h.scrollTop-h.clientHeight<100;activeGamesDock.replaceChildren();activeGamesDock.hidden=!rows?.length;if(keepBottom)settleChatScroll();if(!rows?.length)return;
+ try{
+   const rows=checked(await client.rpc('active_chat_games',{target_room:id}));
+   if(token!==dockToken||session!==epoch||selected!==id)return;
+   const hasActive=Boolean(rows?.length),wasActive=gameRoomsPreviouslyActive.has(id);
+   const lastCheck=gameCardReconciledAt.get(id)||0;
+   // Active games stay responsive. Inactive game cards reconcile less often,
+   // but a transition from playing to finished always checks immediately.
+   if(hasActive||wasActive||Date.now()-lastCheck>=45000){
+     await refreshFinishedGameCards(id,session);
+     if(token!==dockToken||session!==epoch||selected!==id)return;
+     gameCardReconciledAt.set(id,Date.now());
+   }
+   if(hasActive)gameRoomsPreviouslyActive.add(id);
+   else gameRoomsPreviouslyActive.delete(id);
+   if(token!==dockToken||session!==epoch||selected!==id)return;const h=$('history'),keepBottom=h.scrollHeight-h.scrollTop-h.clientHeight<100;activeGamesDock.replaceChildren();activeGamesDock.hidden=!rows?.length;if(keepBottom)settleChatScroll();if(!rows?.length)return;
  const heading=node('small','','Active games'),strip=node('div','active-game-shortcuts');activeGamesDock.append(heading,strip);
  for(const row of rows.slice(0,2)){const b=node('button','active-game-shortcut',row.label+(row.turn_id===me.id?' · Your turn':''));b.type='button';b.onclick=()=>row.mode==='four'?jumpToFour(row.game_id):row.mode==='golf'?openGolf(row.game_id):row.mode==='chess'?openChess(row.game_id):openPool(row.game_id);strip.append(b);}
  }catch{if(token===dockToken){activeGamesDock.hidden=true;}}
