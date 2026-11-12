@@ -36,6 +36,23 @@ export function createConversationCache(capacity = 5) {
       cache.set(roomId, value);
       while (cache.size > capacity) cache.delete(cache.keys().next().value);
     },
+    appendMessage(row) {
+      if (!row?.room_id) return;
+      const entry = cache.get(row.room_id);
+      if (!entry) return;
+      entry.messages.set(row.id, row);
+      entry.parents.set(row.id, row);
+      if (entry.messages.size > 200) {
+        const first = [...entry.messages.values()].sort(compareMessageCursor)[0];
+        entry.messages.delete(first.id);
+        entry.parents.delete(first.id);
+        entry.oldest = [...entry.messages.values()].sort(compareMessageCursor)[0] || null;
+        entry.hasOlder = true;
+        for (const [key, reaction] of entry.reactions) {
+          if (reaction.message_id === first.id) entry.reactions.delete(key);
+        }
+      }
+    },
     updateMessage(row) {
       if (!row?.room_id) return;
       const entry = cache.get(row.room_id);
