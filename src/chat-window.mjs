@@ -53,10 +53,10 @@ export function groupAvatarsToRefresh(rooms, cache, now = Date.now()) {
     .map(room => room.id);
 }
 
-export function imposterDiscoveryInterval(rows) {
-  // Never delay a joined player's lobby/round auto-open checks. Unjoined
-  // accounts only need an occasional game-list badge refresh.
-  return Array.isArray(rows) && rows.some(game => game.joined) ? 2500 : 8000;
+export function imposterDiscoveryInterval(rows, fastUntil = 0, now = Date.now()) {
+  // Lobby create/join requests guarantee a short fast-polling window while
+  // Realtime membership catches up; joined players always poll at 2.5s.
+  return now < fastUntil || (Array.isArray(rows) && rows.some(game => game.joined)) ? 2500 : 8000;
 }
 
 export function needsGameCardReconcile(hasActive, wasActive, lastCheck, now, idleInterval = 45000) {
