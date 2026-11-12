@@ -47,6 +47,12 @@ export function hasOlderMessages(older, cachedNewest, rowsFetched, priorHasOlder
   return older || !cachedNewest ? rowsFetched === pageSize : priorHasOlder;
 }
 
+export function imposterDiscoveryInterval(rows) {
+  // Never delay a joined player's lobby/round auto-open checks. Unjoined
+  // accounts only need an occasional game-list badge refresh.
+  return Array.isArray(rows) && rows.some(game => game.joined) ? 2500 : 8000;
+}
+
 export function needsGameCardReconcile(hasActive, wasActive, lastCheck, now, idleInterval = 45000) {
   return hasActive || wasActive || !lastCheck || now - lastCheck >= idleInterval;
 }
